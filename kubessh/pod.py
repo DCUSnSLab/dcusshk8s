@@ -53,11 +53,39 @@ class UserPod(LoggingConfigurable):
                 "automountServiceAccountToken": False,
                 "containers": [
                     {
-                        "command": ["/bin/sh"],
-                        "image": "jupyter/base-notebook",
+                        "command": ["/bin/bash", "-c"],
+                        "args": ["sudo cp /etc/skel/.* /home/dcuuser/;while true; do echo hello; sleep 10;done"],
+                        "env": [
+                           {
+                              "name": "PATH",
+                              "value": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                           }
+                        ],
+                        "image": "marsberry/dcuubuntu:1.7",
                         "name": "shell",
                         "stdin": True,
                         "tty": True,
+                        "resources": [
+                            {
+                                "requests": [
+                                    {
+                                        "cpu": "10m",
+                                        "memory": "50Mi",
+                                    }
+                                ],
+                            }
+                        ],
+                        "volumeMounts": [
+                            {
+                                "mountPath": "/home",
+                                "name": "poddata"
+                            }
+                        ],
+                    }
+                ],
+                "volumes": [
+                    {
+                        "name": "poddata",
                     }
                 ],
             },
@@ -73,18 +101,36 @@ class UserPod(LoggingConfigurable):
     )
 
     pvc_templates = List(
-        [],
+        [
+            {
+                "apiVersion": "v1",
+                "kind": "PersistentVolumeClaim",
+                "metadata": {
+                    "name": "test3-pvc",
+                },
+                "spec": {
+                    "accessModes": ["ReadWriteOnce"],
+                    "volumeMode": "Filesystem",
+                    "resources": {
+                            "requests": {
+                                    "storage": "3Gi",
+                            },
+                    },
+                    "storageClassName": "openebs-hostpath",
+                },
+            },
+            
+        ],
         help="""
-        List of templates for creating user persistent volume claims.
-
-        Elements should be dicts with fully specified Kubernetes
-        PersistentVolumeClaim objects. If empty (the default), no persistent
-        volumes will be created. The templates must ensure that claim names are
-        unique by including the string '{username}', which is expanded to the
-        name of the user that the shell belongs to. In order to use the created
-        persistent volumes, they should be referenced in the pod_template's
-        spec.volumes.
-        """,
+            List of templates for creating user persistent volume claims.
+            Elements should be dicts with fully specified Kubernetes
+            PersistentVolumeClaim objects. If empty (the default), no persistent
+            volumes will be created. The templates must ensure that claim names are
+            unique by including the string '{username}', which is expanded to the
+            name of the user that the shell belongs to. In order to use the created
+            persistent volumes, they should be referenced in the pod_template's
+            spec.volumes.
+            """,
         config=True
     )
 
@@ -171,7 +217,8 @@ class UserPod(LoggingConfigurable):
     def make_pod_spec(self):
         pod = make_api_object_from_dict(self._expand_all(self.pod_template), k.V1Pod)
         pod.metadata.name = self.pod_name
-
+        print(pod)
+        pod.spec.volumes[0].persistent_volume_claim = k.V1PersistentVolumeClaimVolumeSource(claim_name = self.pod_name + '-pvc')
         if pod.metadata.labels is None:
             pod.metadata.labels = {}
         pod.metadata.labels.update(self.required_labels)
@@ -179,8 +226,11 @@ class UserPod(LoggingConfigurable):
         return pod
 
     def make_pvc_spec(self, template):
+        print('test pvc')
+        print(template)
         pvc = make_api_object_from_dict(self._expand_all(template), k.V1PersistentVolumeClaim)
-
+        pvc.metadata.name = self.pod_name + '-pvc'
+        print(pvc)
         if pvc.metadata.labels is None:
             pvc.metadata.labels = {}
         pvc.metadata.labels.update(self.required_labels)
@@ -222,7 +272,7 @@ class UserPod(LoggingConfigurable):
                 pod.metadata.namespace, body=k.V1DeleteOptions(grace_period_seconds=0)
             )
             pod = None
-
+        print(self.pod_template)
         if not pod:
             # There is no pod, so start one!
             yield PodState.STARTING

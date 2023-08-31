@@ -143,6 +143,7 @@ class KubeSSH(Application):
 app = KubeSSH()
 
 def main():
+    print('hello world')
     loop = asyncio.get_event_loop()
 
     app.initialize()
