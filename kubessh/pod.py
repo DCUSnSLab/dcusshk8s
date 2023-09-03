@@ -54,14 +54,14 @@ class UserPod(LoggingConfigurable):
                 "containers": [
                     {
                         "command": ["/bin/bash", "-c"],
-                        "args": ["sudo cp /etc/skel/.* /home/dcuuser/;while true; do echo hello; sleep 10;done"],
+                        "args": ["sudo chown dcuuser:dcuuser /home/dcuuser;cp /etc/skel/.* /home/dcuuser/;while true; do echo hello; sleep 10;done"],
                         "env": [
                            {
                               "name": "PATH",
                               "value": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                            }
                         ],
-                        "image": "marsberry/dcuubuntu:1.7",
+                        "image": "marsberry/dcuubuntu:1.8",
                         "name": "shell",
                         "stdin": True,
                         "tty": True,
