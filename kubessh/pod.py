@@ -61,7 +61,7 @@ class UserPod(LoggingConfigurable):
                               "value": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                            }
                         ],
-                        "image": "marsberry/dcuubuntu:1.8",
+                        "image": "marsberry/dcuubuntu:1.9",
                         "name": "shell",
                         "stdin": True,
                         "tty": True,
