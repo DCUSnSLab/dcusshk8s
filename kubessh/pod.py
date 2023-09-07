@@ -54,14 +54,14 @@ class UserPod(LoggingConfigurable):
                 "containers": [
                     {
                         "command": ["/bin/bash", "-c"],
-                        "args": ["sudo chown dcuuser:dcuuser /home/dcuuser;cp /etc/skel/.* /home/dcuuser/;echo 'set nu' > /home/dcuuser/.vimrc;while true; do echo hello; sleep 10;done"],
+                        "args": ["sudo chown dcuuser:dcuuser /home/dcuuser;cp /etc/skel/.* /home/dcuuser/;echo -e 'if has (\"syntax\")\\n    syntax on\\nendif\\n\\nset autoindent\\nset cindent\\nset nu\\n\\nset smartindent\\nset tabstop=4\\nset expandtab\\nset shiftwidth=4' > /home/dcuuser/.vimrc;while true; do echo hello; sleep 10;done"],
                         "env": [
                            {
                               "name": "PATH",
                               "value": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                            }
                         ],
-                        "image": "marsberry/dcuubuntu:1.9",
+                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:1.9",
                         "name": "shell",
                         "stdin": True,
                         "tty": True,
