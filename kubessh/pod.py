@@ -54,7 +54,7 @@ class UserPod(LoggingConfigurable):
                 "containers": [
                     {
                         "command": ["/bin/bash", "-c"],
-                        "args": ["sudo chown dcuuser:dcuuser /home/dcuuser;cp /etc/skel/.* /home/dcuuser/;while true; do echo hello; sleep 10;done"],
+                        "args": ["sudo chown dcuuser:dcuuser /home/dcuuser;cp /etc/skel/.* /home/dcuuser/;echo 'set nu' > /home/dcuuser/.vimrc;while true; do echo hello; sleep 10;done"],
                         "env": [
                            {
                               "name": "PATH",
