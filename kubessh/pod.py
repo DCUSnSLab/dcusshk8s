@@ -65,16 +65,16 @@ class UserPod(LoggingConfigurable):
                         "name": "shell",
                         "stdin": True,
                         "tty": True,
-                        "resources": [
-                            {
-                                "requests": [
-                                    {
-                                        "cpu": "10m",
-                                        "memory": "50Mi",
-                                    }
-                                ],
-                            }
-                        ],
+                        "resources": {
+                           "requests": {
+                                   "cpu": "100m",
+                                   "memory": "150Mi",
+                           },
+                           "limits": {
+                                       "cpu": "250m",
+                                       "memory": "200Mi",
+                           },
+                        },
                         "volumeMounts": [
                             {
                                 "mountPath": "/home",
