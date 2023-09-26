@@ -61,7 +61,7 @@ class UserPod(LoggingConfigurable):
                               "value": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                            }
                         ],
-                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:1.9",
+                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:2.0",
                         "name": "shell",
                         "stdin": True,
                         "tty": True,
