@@ -2,7 +2,7 @@ FROM python:3.6.8-alpine
 
 WORKDIR /dcusshk8s
 
-COPY dcusshk8s ./
+COPY . /dcusshk8s
 
 RUN apk add build-base
 # RUN apk add pip
