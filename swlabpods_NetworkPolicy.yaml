@@ -3,7 +3,9 @@ kind: NetworkPolicy
 metadata:
   name: swlabpods-deny-external-traffic
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      kubessh: userpods
   policyTypes:
   - Egress
   egress:
