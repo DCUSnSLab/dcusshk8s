@@ -198,6 +198,7 @@ class UserPod(LoggingConfigurable):
 
         self.required_labels = {
             'kubessh.yuvi.in/username': escapism.escape(self.username, escape_char='-'),
+            'kubessh': 'userpods'
         }
 
         # Threads required to perform all activities in this shell
