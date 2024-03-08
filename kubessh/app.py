@@ -92,15 +92,17 @@ class KubeSSH(Application):
             with geoip2.database.Reader(database_path) as reader:
                 response = reader.city(peer_addr)
                 access_country = response.country.iso_code
+                access_city = response.city.name
         except Exception as e:
             print(f"Error: {e}")
             access_country = None
+            access_city = None
 
         print(f"user ID : {username}")
         print(f"user IP : {peer_addr}")
         print(f"access time : {access_time}")
         print(f"country : {access_country}")
-
+        print(f"city : {access_city}")
 
     async def handle_client(self, process):
         await self.user_info(process)
