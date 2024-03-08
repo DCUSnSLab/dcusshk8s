@@ -9,7 +9,8 @@ from functools import partial
 import itertools
 from traitlets.config import Application
 from traitlets import Unicode, Bool, Integer, Type, default
-
+from datetime import datetime
+import geoip2.database
 import asyncssh
 
 from kubessh.pod import UserPod, PodState
@@ -81,7 +82,29 @@ class KubeSSH(Application):
         else:
             return 'default'
 
+    async def user_info(self, process):
+        username = process.channel.get_extra_info('username')
+        peer_addr = process.channel.get_extra_info('peername')[0]
+        access_time = datetime.now()
+
+        database_path = './kubessh/GeoLite2-City.mmdb'
+        try:
+            with geoip2.database.Reader(database_path) as reader:
+                response = reader.city(peer_addr)
+                access_country = response.country.iso_code
+        except Exception as e:
+            print(f"Error: {e}")
+            access_country = None
+
+        print(f"user ID : {username}")
+        print(f"user IP : {peer_addr}")
+        print(f"access time : {access_time}")
+        print(f"country : {access_country}")
+
+
     async def handle_client(self, process):
+        await self.user_info(process)
+
         username = process.channel.get_extra_info('username')
 
         pod = UserPod(parent=self, username=username, namespace=self.default_namespace)
