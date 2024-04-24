@@ -67,11 +67,11 @@ class UserPod(LoggingConfigurable):
                         "tty": True,
                         "resources": {
                            "requests": {
-                                   "cpu": "100m",
+                                   "cpu": "50m",
                                    "memory": "150Mi",
                            },
                            "limits": {
-                                       "cpu": "250m",
+                                       "cpu": "100m",
                                        "memory": "200Mi",
                            },
                         },
