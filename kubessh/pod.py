@@ -116,7 +116,7 @@ class UserPod(LoggingConfigurable):
                                     "storage": "3Gi",
                             },
                     },
-                    "storageClassName": "openebs-hostpath",
+                    "storageClassName": "mayastor-normal-3",
                 },
             },
             
@@ -333,7 +333,7 @@ class UserPod(LoggingConfigurable):
             # PtyProcess and asyncssh disagree on ordering of terminal size
             ts = ssh_process.get_terminal_size()
             process = PtyProcess.spawn(argv=kubectl_command, dimensions=(ts[1], ts[0]))
-            await ssh_process.redirect(process, process, process)
+            await ssh_process.redirect(process, process)
 
             loop = asyncio.get_event_loop()
 
