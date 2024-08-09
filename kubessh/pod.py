@@ -116,7 +116,7 @@ class UserPod(LoggingConfigurable):
                                     "storage": "3Gi",
                             },
                     },
-                    "storageClassName": "mayastor-normal-3",
+                    "storageClassName": "openebs-hostpath",
                 },
             },
             

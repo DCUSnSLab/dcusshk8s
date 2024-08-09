@@ -16,6 +16,7 @@ from kubessh.pod import UserPod, PodState
 from kubessh.authentication import Authenticator
 from kubessh.authentication.github import GitHubAuthenticator
 
+from kubessh.pod_manager import PodManager
 
 class KubeSSH(Application):
     config_file = Unicode(
@@ -142,13 +143,23 @@ class KubeSSH(Application):
 
 app = KubeSSH()
 
-def main():
+async def main():
     print('hello world')
-    loop = asyncio.get_event_loop()
+    #loop = asyncio.get_event_loop()
 
     app.initialize()
-    loop.run_until_complete(app.start())
-    loop.run_forever()
+    #loop.run_until_complete(app.start())
+    #loop.run_forever()
+
+    pod_manager = PodManager(namespace="swlabpods")
+
+    await asyncio.gather(
+        app.start(),
+        pod_manager.interactive_input()
+    )
+
 
 if __name__ == '__main__':
-    main()
+    #main()
+    asyncio.run(main())
+
