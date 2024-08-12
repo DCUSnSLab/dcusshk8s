@@ -87,7 +87,6 @@ class KubeSSH(Application):
 
         pod = UserPod(parent=self, username=username, namespace=self.default_namespace)
 
-
         spinner = itertools.cycle(['-', '/', '|', '\\'])
 
         async for status in pod.ensure_running():
@@ -150,8 +149,7 @@ async def main():
     app.initialize()
     #loop.run_until_complete(app.start())
     #loop.run_forever()
-
-    pod_manager = PodManager(namespace="swlabpods")
+    pod_manager = PodManager(namespace=app.default_namespace)
 
     await asyncio.gather(
         app.start(),
