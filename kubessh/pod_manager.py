@@ -10,23 +10,23 @@ class PodManager(Application):
         self.namespace = namespace
 
 
-    def list_pods(self):
-        pods = self.v1.list_namespaced_pod(self.namespace)
-        print(f"\nPods in '{self.namespace}' namespace")
-        print("-" * 50)
-        for idx, pod in enumerate(pods.items, start=1):
-            print(f"[{idx}] {pod.metadata.name}")
-        print("=" * 50)
+    def list_pods(self, search_string=None):
+        pods_list = self.v1.list_namespaced_pod(self.namespace)
 
-
-    def search_pods(self, search_string):
-        pods = self.v1.list_namespaced_pod(self.namespace)
-        print(f"\nSearching for '{search_string}' in '{self.namespace}' namespace")
+        if search_string is not None:
+            pods_list.items = [pod for pod in pods_list.items if search_string in pod.metadata.name]
+            print(f"\nSearching for '{search_string}' in '{self.namespace}' namespace")
+        else:
+            print(f"\nPods in '{self.namespace}' namespace")
         print("-" * 50)
-        found_pods = [pod.metadata.name for pod in pods.items if search_string in pod.metadata.name]
-        if found_pods:
-            for idx, pod in enumerate(found_pods, start=1):
-                print(f"[{idx}] {pod}")
+
+        if pods_list.items:
+            print(f"{'NUM':<4} {'NAME':<30} {'STATUS'}")
+            for idx, pod in enumerate(pods_list.items, start=1):
+                pod_name = pod.metadata.name
+                pod_status = pod.status.phase
+                if pod.metadata.deletion_timestamp is not None: pod_status = "Terminating"
+                print(f"{idx:<4} {pod_name:<30} {pod_status}")
         else:
             print("Not found")
         print("=" * 50)
@@ -78,7 +78,7 @@ class PodManager(Application):
             elif user_input == '2':
                 print("Enter search username >> ", end="")
                 search_string = await asyncio.get_event_loop().run_in_executor(None, input)
-                self.search_pods(search_string)
+                self.list_pods(search_string)
             elif user_input == '3':
                 print("Enter pod name >> ", end="")
                 pod_name = await asyncio.get_event_loop().run_in_executor(None, input)
