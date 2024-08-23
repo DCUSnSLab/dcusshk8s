@@ -53,13 +53,9 @@ class PodManager(Application):
         username = pod_name.split('-')[1]
         while True:
             matching_pods = self.list_pods(search_string=pod_name)
-
+            
             process.stdout.write(f"\r\nlist of pods user '{username}'\r\n".encode('ascii'))
-            if matching_pods:
-                for pod in matching_pods:
-                    process.stdout.write(f" - {pod.metadata.name}\r\n".encode('ascii'))
-            else:
-                process.stdout.write(f"No pods found for user '{username}' in namespace '{self.namespace}'.\r\n".encode('ascii'))
+            self._print_pods(matching_pods, process=process)
             
             process.stdout.write(b"\r\nEnter the name of the pod to connect or create a new one: \r\n")
 
@@ -103,6 +99,28 @@ class PodManager(Application):
                 pod_name = await asyncio.get_event_loop().run_in_executor(None, input)
                 await self.delete_pod(pod_name)
 
+
+    def _print_pods(self, pods, process=None):
+        output = ""
+        if pods:
+            output += "-" * 50 + "\r\n"
+            output += f"{'NUM':<4} {'NAME':<30} {'STATUS'}\r\n"
+            for idx, pod in enumerate(pods, start=1):
+                pod_name = pod.metadata.name
+                pod_status = pod.status.phase
+                if pod.metadata.deletion_timestamp is not None: 
+                    pod_status = "Terminating"
+                output += f"{idx:<4} {pod_name:<30} {pod_status}\r\n"
+        else:
+            output += "No pods found\r\n"
+        output += "=" * 50 + "\r\n"
+        
+        if process:
+            process.stdout.write(output.encode('ascii'))
+        else:
+            print(output)
+
+    '''
     def _print_pods(self, pods):
         if pods:
             print("-" * 50)
@@ -115,4 +133,4 @@ class PodManager(Application):
         else:
             print("No pods found")
         print("=" * 50)
-
+    '''
