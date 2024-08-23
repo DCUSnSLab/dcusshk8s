@@ -84,8 +84,12 @@ class KubeSSH(Application):
 
     async def handle_client(self, process):
         username = process.channel.get_extra_info('username')
-
         pod = UserPod(parent=self, username=username, namespace=self.default_namespace)
+
+        pod_manager = PodManager(namespace=self.default_namespace)
+        new_pod_name = await pod_manager.select_and_connect_pod(process, pod.pod_name)
+
+        pod.pod_name = new_pod_name
 
         spinner = itertools.cycle(['-', '/', '|', '\\'])
 
