@@ -61,8 +61,7 @@ class PodManager(Application):
             else:
                 process.stdout.write(f"No pods found for user '{username}' in namespace '{self.namespace}'.\r\n".encode('ascii'))
             
-            process.stdout.write(b"\r\nEnter the name of the pod to connect or create a new one: ")
-            process.stdout.write(b"\r\n")
+            process.stdout.write(b"\r\nEnter the name of the pod to connect or create a new one: \r\n")
 
             command = b""
             while not command.endswith(b'\r'):
@@ -73,7 +72,7 @@ class PodManager(Application):
                 process.stdout.write(f"{command.decode('utf-8')}\r".encode('ascii'))
 
 
-            process.stdout.write(b"\r\n")
+            process.stdout.write(b"\r\n\n")
             command = command.decode('utf-8').strip()
             
             new_pod_name = f"{pod_name}-{command}"
@@ -88,7 +87,6 @@ class PodManager(Application):
             user_input = user_input.strip()
 
             if user_input == '1':
-                # 모든 Pods 출력
                 pods = self.list_pods()
                 self._print_pods(pods)
             elif user_input == '2':
