@@ -86,8 +86,8 @@ class KubeSSH(Application):
         username = process.channel.get_extra_info('username')
         pod = UserPod(parent=self, username=username, namespace=self.default_namespace)
 
-        pod_manager = PodManager(namespace=self.default_namespace)
-        new_pod_name = await pod_manager.select_and_connect_pod(process, pod.pod_name)
+        pod_manager = PodManager(namespace=self.default_namespace, process=process)
+        new_pod_name = await pod_manager.pod_management_client(pod.pod_name)
 
         pod.pod_name = new_pod_name
 
@@ -157,7 +157,7 @@ async def main():
 
     await asyncio.gather(
         app.start(),
-        pod_manager.interactive_input()
+        pod_manager.pod_management_developer()
     )
 
 

@@ -1,13 +1,16 @@
 from kubernetes import client, config
 from traitlets.config import Application
 import asyncio
+import itertools
 from kubessh.pod import UserPod, PodState
 
 class PodManager(Application):
-    def __init__(self, namespace="default"):
+    def __init__(self, namespace="default", process=None):
         config.load_kube_config()
         self.v1 = client.CoreV1Api()
         self.namespace = namespace
+        self.process = process
+
 
     def list_pods(self, search_string=None):
         pods_list = self.v1.list_namespaced_pod(self.namespace)
@@ -20,12 +23,57 @@ class PodManager(Application):
 
         return matching_pods
 
-    async def create_pod(self, pod_name):
+
+    def _print_pods(self, pods):
+        output = "-" * 50 + "\r\n"
+        if pods:
+            output += f"{'NUM':<4} {'NAME':<30} {'STATUS'}\r\n"
+            for idx, pod in enumerate(pods, start=1):
+                pod_name = pod.metadata.name
+                pod_status = pod.status.phase
+                if pod.metadata.deletion_timestamp is not None:
+                    pod_status = "Terminating"
+                output += f"{idx:<4} {pod_name:<30} {pod_status}\r\n"
+        else:
+            output += "No pods found\r\n"
+        output += "=" * 50 + "\r\n"
+
+        if self.process:
+            self.process.stdout.write(output.encode('ascii'))
+        else:
+            print(output)
+
+
+    async def create_pod(self, username, pod_name=None):
+        pod = UserPod(parent=self, username=username, namespace=self.namespace)
+        if pod_name:
+            pod.pod_name = pod_name
+
+        spinner = itertools.cycle(['-', '/', '|', '\\'])
+        
         print("\n", "-" * 50, sep="")
-        pod = UserPod(parent=self, username=pod_name, namespace=self.namespace)
-        async for status in pod.ensure_running():
-            pass
+
+        if self.process:
+            self.process.stdout.write(("-" * 50 + "\r\n").encode('ascii'))
+
+            spinner = itertools.cycle(['-', '/', '|', '\\'])
+
+            async for status in pod.ensure_running():
+                if status == PodState.RUNNING:
+                    self.process.stdout.write('\r\n\033[K'.encode('ascii'))
+                    self.process.stdout.write(f"\r'{pod.pod_name}' is already exists.\r\n".encode('ascii'))
+                elif status == PodState.STARTING:
+                    self.process.stdout.write(f"\r'{pod.pod_name}' creating....".encode('ascii'))
+                    self.process.stdout.write('\b'.encode('ascii'))
+                    self.process.stdout.write(next(spinner).encode('ascii'))
+
+            self.process.stdout.write(("=" * 50 + "\r\n").encode('ascii'))
+
+        else:
+            async for status in pod.ensure_running():
+                pass
         print("=" * 50)
+
 
     async def delete_pod(self, pod_name):
         try:
@@ -49,34 +97,49 @@ class PodManager(Application):
 
         print("=" * 50)
 
-    async def select_and_connect_pod(self, process, pod_name):
+
+    async def get_client_input(self, prompt_message):
+        self.process.stdout.write(prompt_message.encode('ascii'))
+        user_input = b""
+        tmp = b""
+
+        while tmp != b'\r':
+            tmp = await self.process.stdin.read(1)
+            if not tmp:
+                break
+            user_input += tmp
+            self.process.stdout.write(user_input + b'\r')
+
+        return user_input.decode('utf-8').strip()
+
+
+    async def pod_management_client(self, pod_name):
         username = pod_name.split('-')[1]
         while True:
-            matching_pods = self.list_pods(search_string=pod_name)
-            
-            process.stdout.write(f"\r\nlist of pods user '{username}'\r\n".encode('ascii'))
-            self._print_pods(matching_pods, process=process)
-            
-            process.stdout.write(b"\r\nEnter the name of the pod to connect or create a new one: \r\n")
+            user_input = await self.get_client_input("\r\nEnter '1' to list all pods, '2' to create pod, '3' to delete pod.\r\n")
 
-            command = b""
-            while not command.endswith(b'\r'):
-                tmp = await process.stdin.read(1)
-                if not tmp:
-                    break
-                command += tmp
-                process.stdout.write(f"{command.decode('utf-8')}\r".encode('ascii'))
+            if user_input == '1':
+                matching_pods = self.list_pods(search_string=pod_name)
+                self.process.stdout.write(f"\r\nList of pods user '{username}'\r\n".encode('ascii'))
+                self._print_pods(matching_pods)
+
+            elif user_input == '2':
+                matching_pods = self.list_pods(search_string=pod_name)
+                if len(matching_pods) >= 3:
+                    self.process.stdout.write(b"\r\nYou already have 3 pods.\r\n")
+                    continue
+
+                command = await self.get_client_input("\r\nEnter pod name to create:\r\n")
+
+                new_pod_name = f"{pod_name}-{command}"
+
+                await self.create_pod(username, pod_name=new_pod_name)
+
+            elif user_input =='3':
+                pass
 
 
-            process.stdout.write(b"\r\n\n")
-            command = command.decode('utf-8').strip()
-            
-            new_pod_name = f"{pod_name}-{command}"
-
-            return new_pod_name
-
-
-    async def interactive_input(self):
+    async def pod_management_developer(self):
         while True:
             print("\nEnter '1' to list all pods, '2' to search for pods, '3' to create pod, '4' to delete pod.")
             user_input = await asyncio.get_event_loop().run_in_executor(None, input)
@@ -99,38 +162,3 @@ class PodManager(Application):
                 pod_name = await asyncio.get_event_loop().run_in_executor(None, input)
                 await self.delete_pod(pod_name)
 
-
-    def _print_pods(self, pods, process=None):
-        output = ""
-        if pods:
-            output += "-" * 50 + "\r\n"
-            output += f"{'NUM':<4} {'NAME':<30} {'STATUS'}\r\n"
-            for idx, pod in enumerate(pods, start=1):
-                pod_name = pod.metadata.name
-                pod_status = pod.status.phase
-                if pod.metadata.deletion_timestamp is not None: 
-                    pod_status = "Terminating"
-                output += f"{idx:<4} {pod_name:<30} {pod_status}\r\n"
-        else:
-            output += "No pods found\r\n"
-        output += "=" * 50 + "\r\n"
-        
-        if process:
-            process.stdout.write(output.encode('ascii'))
-        else:
-            print(output)
-
-    '''
-    def _print_pods(self, pods):
-        if pods:
-            print("-" * 50)
-            print(f"{'NUM':<4} {'NAME':<30} {'STATUS'}")
-            for idx, pod in enumerate(pods, start=1):
-                pod_name = pod.metadata.name
-                pod_status = pod.status.phase
-                if pod.metadata.deletion_timestamp is not None: pod_status = "Terminating"
-                print(f"{idx:<4} {pod_name:<30} {pod_status}")
-        else:
-            print("No pods found")
-        print("=" * 50)
-    '''
