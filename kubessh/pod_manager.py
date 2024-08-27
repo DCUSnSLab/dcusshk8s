@@ -159,6 +159,11 @@ class PodManager(Application):
                 command = await self.get_client_input("\r\nEnter pod name to create:\r\n")
 
                 new_pod_name = f"{pod_name}-{command}"
+                
+                user_input = await self.get_client_input(f"\r\nDo you want to create it? [y/n]\r\n")
+                if not user_input.lower() in ('y', 'yes'):
+                        self.process.stdout.write(b"\r\nAbort.\r\n")
+                        continue
 
                 await self.create_pod(username, pod_name=new_pod_name)
 
@@ -175,7 +180,7 @@ class PodManager(Application):
                     self.process.stdout.write(f"\r\n'{new_pod_name}' not found.\r\n".encode('ascii'))
                     continue
 
-                user_input = await self.get_client_input(f"\r\nAre you sure to delete '{new_pod_name}'? [Y/n]\r\n")
+                user_input = await self.get_client_input(f"\r\nAre you sure to delete '{new_pod_name}'? [y/n]\r\n")
 
                 if not user_input.lower() in ('y', 'yes'):
                     self.process.stdout.write(b"\r\nAbort.\r\n")
