@@ -4,6 +4,7 @@ import asyncio
 import itertools
 from kubessh.pod import UserPod, PodState
 
+
 class PodManager(Application):
     def __init__(self, namespace="default", process=None, **kwargs):
         super().__init__(**kwargs)
@@ -11,7 +12,6 @@ class PodManager(Application):
         self.v1 = client.CoreV1Api()
         self.namespace = namespace
         self.process = process
-
 
     def list_pods(self, search_string=None):
         pods_list = self.v1.list_namespaced_pod(self.namespace)
@@ -23,7 +23,6 @@ class PodManager(Application):
             matching_pods = pods_list.items
 
         return matching_pods
-
 
     def _print_pods(self, pods):
         output = "-" * 50 + "\r\n"
@@ -44,7 +43,6 @@ class PodManager(Application):
         else:
             print(output)
 
-
     async def create_pod(self, username, pod_name=None):
         pod = UserPod(parent=self, username=username, namespace=self.namespace)
         if pod_name:
@@ -55,10 +53,10 @@ class PodManager(Application):
         print("\n", "-" * 50, sep="")
 
         if self.process:
-            self.process.stdout.write(("-" * 50 + "\r\n").encode('ascii'))
+            self.process.stdout.write(("\r\n" + "-" * 50 + "\r\n").encode('ascii'))
 
             spinner = itertools.cycle(['-', '/', '|', '\\'])
-
+            
             async for status in pod.ensure_running():
                 if status == PodState.RUNNING:
                     self.process.stdout.write('\r\n\033[K'.encode('ascii'))
@@ -74,7 +72,6 @@ class PodManager(Application):
             async for status in pod.ensure_running():
                 pass
         print("=" * 50)
-
 
     async def delete_pod(self, pod_name):
         try:
@@ -100,7 +97,6 @@ class PodManager(Application):
 
         print("=" * 50)
 
-
     async def get_client_input(self, prompt_message):
         self.process.stdout.write(prompt_message.encode('ascii'))
         user_input = b""
@@ -114,7 +110,6 @@ class PodManager(Application):
             self.process.stdout.write(user_input + b'\r')
 
         return user_input.decode('utf-8').strip()
-
 
     async def pod_management_client(self, pod_name):
         username = pod_name.split('-')[1]
@@ -134,7 +129,7 @@ class PodManager(Application):
                 pod = next((pod for pod in matching_pods if pod.metadata.name == new_pod_name), None)
 
                 if not pod:
-                    self.process.stdout.write(f"\r\n'{new_pod_name}' was not created.\r\n".encode('ascii'))
+                    self.process.stdout.write(f"\r\n'{new_pod_name}' was not created.".encode('ascii'))
 
                     if len(matching_pods) > 2:
                         self.process.stdout.write(b"\r\nYou already have 3 pods.\r\n")
@@ -148,7 +143,7 @@ class PodManager(Application):
 
                     await self.create_pod(username, pod_name=new_pod_name)
 
-                if pod.metadata.deletion_timestamp:
+                elif pod.metadata.deletion_timestamp:
                     self.process.stdout.write(f"\r\n'{new_pod_name}' is Terminating.\r\n".encode('ascii'))
                     continue
 
@@ -188,7 +183,6 @@ class PodManager(Application):
 
                 await self.delete_pod(new_pod_name)
                 self.process.stdout.write(f"\r\n'{pod_name}' is deleted.\r\n".encode('ascii'))
-
 
     async def pod_management_developer(self):
         while True:
