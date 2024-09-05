@@ -102,12 +102,12 @@ class PodManager(Application):
         user_input = b""
         tmp = b""
 
-        while tmp != b'\r':
+        while True:
             tmp = await self.process.stdin.read(1)
-            if not tmp:
+            if not tmp or tmp == b'\r':
                 break
             user_input += tmp
-            self.process.stdout.write(user_input + b'\r')
+            self.process.stdout.write(tmp)
 
         return user_input.decode('utf-8').strip()
 
@@ -167,7 +167,7 @@ class PodManager(Application):
 
                 await self.create_pod(username, pod_name=new_pod_name)
 
-            elif user_input =='4':
+            elif user_input == '4':
                 if len(matching_pods) < 1:
                     self.process.stdout.write(b"\r\nNo pods to delete.\r\n\n")
                     continue
@@ -188,6 +188,11 @@ class PodManager(Application):
 
                 await self.delete_pod(new_pod_name)
                 self.process.stdout.write(f"\r\n'{pod_name}' is deleted.\r\n".encode('ascii'))
+
+            elif user_input.lower() in ('q', 'exit'):
+                self.process.stdout.write(b"\r\n")
+                self.process.exit(0)
+                break
 
     async def pod_management_developer(self):
         while True:
