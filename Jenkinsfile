@@ -24,7 +24,7 @@ node {
         def BUILD_NUMBER_1 = BUILD_NUMBER.toInteger() + 3
         docker.withRegistry("https://harbor.cu.ac.kr", "harbor") {
             app.push("latest")
-            app.push("${env.BUILD_NUMBER_1}")
+            app.push("${BUILD_NUMBER_1}")
         }
     }
 
