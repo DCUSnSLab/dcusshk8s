@@ -15,6 +15,8 @@ RUN pip install --upgrade pip
 
 RUN pip install --editable .
 
+RUN pip install pycryptodome
+
 RUN apk add vim
 
 WORKDIR /dcusshk8s/kubessh
