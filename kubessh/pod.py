@@ -45,7 +45,20 @@ class UserPod(LoggingConfigurable):
     Config from administrators is set via traitlets in config.
     """
     pod_template = Dict(
-        {
+        help="""
+        Template for creating user pods.
+
+        This should be a dict containing a fully specified Kubernetes
+        Pod object. Specific components of it may be changed to
+        match the configuration of the Shell object requested.
+        """,
+        config=True
+    )
+
+
+    @default('pod_template')
+    def _default_pod_template(self):
+        return {
             "apiVersion": "v1",
             "kind": "Pod",
             "metadata": {},
@@ -89,16 +102,8 @@ class UserPod(LoggingConfigurable):
                     }
                 ],
             },
-        },
-        help="""
-        Template for creating user pods.
+       }
 
-        This should be a dict containing a fully specified Kubernetes
-        Pod object. Specific components of it may be changed to
-        match the configuration of the Shell object requested.
-        """,
-        config=True
-    )
 
     pvc_templates = List(
         [

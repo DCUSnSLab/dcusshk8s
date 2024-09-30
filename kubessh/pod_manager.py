@@ -43,10 +43,14 @@ class PodManager(Application):
         else:
             print(output)
 
-    async def create_pod(self, username, pod_name=None):
+    async def create_pod(self, username, pod_name=None, gpu=None):
         pod = UserPod(parent=self, username=username, namespace=self.namespace)
         if pod_name:
             pod.pod_name = pod_name
+
+        if gpu:
+            pod.pod_template["spec"]["nodeSelector"] = {"gpu": "true"}
+            pod.pod_template["spec"]["containers"][0]["resources"]["limits"]["nvidia.com/gpu"] = "1"
 
         spinner = itertools.cycle(['-', '/', '|', '\\'])
         
@@ -122,15 +126,16 @@ class PodManager(Application):
                 self._print_pods(matching_pods)
 
             elif user_input =='2':
-                command = await self.get_client_input("\r\nEnter pod name to connect:\r\n")
+                identifier = await self.get_client_input("\r\nEnter pod name to connect:\r\n")
                 
-                new_pod_name = f"{pod_name}-{command}"
+                new_pod_name = f"{pod_name}-{identifier}"
 
                 pod = next((pod for pod in matching_pods if pod.metadata.name == new_pod_name), None)
 
                 if not pod:
                     self.process.stdout.write(f"\r\n'{new_pod_name}' was not created.".encode('ascii'))
-
+                    continue
+                    '''
                     if len(matching_pods) > 2:
                         self.process.stdout.write(b"\r\nYou already have 3 pods.\r\n")
                         continue
@@ -142,6 +147,7 @@ class PodManager(Application):
                         continue
 
                     await self.create_pod(username, pod_name=new_pod_name)
+                    '''
 
                 elif pod.metadata.deletion_timestamp:
                     self.process.stdout.write(f"\r\n'{new_pod_name}' is Terminating.\r\n".encode('ascii'))
@@ -156,25 +162,31 @@ class PodManager(Application):
                     self.process.stdout.write(b"\r\nYou already have 3 pods.\r\n")
                     continue
 
-                command = await self.get_client_input("\r\nEnter pod name to create:\r\n")
+                pod_type = await self.get_client_input("\r\nEnter '1' to create CPU pod, '2' to create GPU pod.\r\n")
 
-                new_pod_name = f"{pod_name}-{command}"
+                identifier = await self.get_client_input("\r\nEnter pod name to create:\r\n")
+
+                new_pod_name = f"{pod_name}-{identifier}"
                 
                 user_input = await self.get_client_input(f"\r\nDo you want to create it? [y/n]\r\n")
                 if not user_input.lower() in ('y', 'yes'):
-                        self.process.stdout.write(b"\r\nAbort.\r\n")
-                        continue
+                    self.process.stdout.write(b"\r\nAbort.\r\n")
+                    continue
+                
+                if pod_type == '1':
+                    await self.create_pod(username, pod_name=new_pod_name)
 
-                await self.create_pod(username, pod_name=new_pod_name)
+                elif pod_type == '2':
+                    await self.create_pod(username, pod_name=new_pod_name, gpu="true")
 
             elif user_input == '4':
                 if len(matching_pods) < 1:
                     self.process.stdout.write(b"\r\nNo pods to delete.\r\n\n")
                     continue
 
-                command = await self.get_client_input("\r\nEnter pod name to delete:\r\n")
+                identifier = await self.get_client_input("\r\nEnter pod name to delete:\r\n")
 
-                new_pod_name = f"{pod_name}-{command}"
+                new_pod_name = f"{pod_name}-{identifier}"
                 
                 if not any(pod.metadata.name == new_pod_name for pod in matching_pods):
                     self.process.stdout.write(f"\r\n'{new_pod_name}' not found.\r\n".encode('ascii'))
