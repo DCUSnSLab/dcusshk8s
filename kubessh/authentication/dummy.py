@@ -48,7 +48,7 @@ class DummyAuthenticator(Authenticator):
         encrypted_password = self.encrypt_password(public_key, password)
         if not encrypted_password:
             return False
-        
+
         if username.split('-')[0] == 'dcucode':
             # tokenLoginUrl = 'http://203.250.33.85/api/token_auth'
             tokenLoginUrl = 'http://203.250.33.87:31320/api/token_auth'
