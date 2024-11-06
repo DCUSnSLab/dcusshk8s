@@ -84,7 +84,16 @@ class KubeSSH(Application):
             return 'default'
 
     async def handle_client(self, process):
-        username = process.channel.get_extra_info('username')
+
+        # username = process.channel.get_extra_info('username')
+
+        username = process.channel.get_extra_info('username').split('-')
+        if username and username[0] == 'dcucode':
+            username = '-'.join(username[1:])
+        else:
+            username = '-'.join(username)
+        print(username) 
+
         pod = UserPod(parent=self, username=username, namespace=self.default_namespace)
 
         try:

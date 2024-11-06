@@ -60,7 +60,12 @@ class BaseServer(asyncssh.SSHServer, LoggingConfigurable):
                 "Only localhost connections allowed"
             )
 
-        username = self.conn.get_extra_info('username')
+        username = process.channel.get_extra_info('username').split('-')
+        if username and username[0] == 'dcucode':
+            username = '-'.join(username[1:])
+        else:
+            username = '-'.join(username)
+        
         user_pod = UserPod(username, self.namespace)
 
         cache_key = f'{user_pod.pod_name}:{dest_port}'
