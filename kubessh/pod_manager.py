@@ -3,7 +3,7 @@ import asyncio
 import itertools
 from kubessh.pod import UserPod, PodState
 
-MAX_PODS_PER_USER = 3
+MAX_PODS_PER_USER = 5
 
 
 class PodManager:
@@ -20,10 +20,25 @@ class PodManager:
             matching_pods = pods_list.items
         return matching_pods
 
-    async def create_pod(self, username, pod_name=None):
+    async def create_pod(self, username, pod_name=None, image=None, cpu=None, mem=None, gpu=False):
         pod = UserPod(username=username, namespace=self.namespace)
         if pod_name:
             pod.pod_name = pod_name
+        if image == 'Rocky:9':
+            pod.pod_template["spec"]["containers"][0]["image"] = "harbor.cu.ac.kr/swlabpods_test/rocky:latest"
+        elif image == 'Debian:12':
+            pod.pod_template["spec"]["containers"][0]["image"] = "harbor.cu.ac.kr/swlabpods_test/debian:latest"
+
+        if cpu:
+            print(cpu)
+            pod.pod_template["spec"]["containers"][0]["resources"]["limits"]["cpu"] = f"{cpu}"
+        if mem:
+            print(mem)
+            pod.pod_template["spec"]["containers"][0]["resources"]["limits"]["memory"] = f"{mem}"
+        if gpu:
+            pod.pod_template["spec"]["nodeSelector"] = {"gpu": "true"}
+            pod.pod_template["spec"]["containers"][0]["resources"]["limits"]["nvidia.com/gpu"] = "1"
+
         async for status in pod.ensure_running():
             pass
 
@@ -58,6 +73,28 @@ class ClientPodManager(PodManager):
                 self.process.stdout.write(tmp)
         return user_input.decode('utf-8').strip()
 
+    async def get_validated_input(self, min_value, max_value, unit='', value_name='value'):
+        while True:
+            user_input = await self.get_client_input(f"\r\n\r\nEnter {value_name} allocation. Between {min_value} ~ {max_value} {unit}\r\n'd' - default   \
+                                                        \r\n'q' - cancel    \
+                                                        \r\nEnter the value >> ")
+            #user_input = await self.get_client_input(prompt)
+            if user_input.lower() == 'q':
+                self.process.stdout.write("\r\nOperation aborted.\r\n".encode('utf-8'))
+                return 'q'
+            if user_input.lower() == 'd':
+                return None
+            try:
+                if user_input.endswith(unit):
+                    user_input = user_input.rstrip(unit)
+                input_value = int(user_input)
+                if min_value <= input_value <= max_value:
+                    return f"{input_value}{unit}"
+                else:
+                    self.process.stdout.write(f"\r\nInvalid {value_name} value. Must be between {min_value} {unit} and {max_value} {unit}".encode('utf-8'))
+            except ValueError:
+                self.process.stdout.write(f"\r\nInvalid {value_name} value. Must be between {min_value} {unit} and {max_value} {unit}".encode('utf-8'))
+
     def _print_pods(self, pods):
         output = "\r\n" + "-" * 50 + "\r\n"
         if pods:
@@ -77,8 +114,13 @@ class ClientPodManager(PodManager):
         username = self.pod_name.split('-')[1]
 
         while True:
-            user_input = await self.get_client_input(
-                "\r\n[Pod Management]\r\n1. List all pods\r\n2. Connect to pod\r\n3. Create pod\r\n4. Delete pod\r\nq. exit\r\nSelect an option: "
+            user_input = await self.get_client_input("\r\n[Pod Management]  \
+                                                    \r\n1 - List all pods   \
+                                                    \r\n2 - Connect to pod  \
+                                                    \r\n3 - Create pod      \
+                                                    \r\n4 - Delete pod      \
+                                                    \r\nq - exit            \
+                                                    \r\nSelect an option >> "
             )
             matching_pods = self.list_pods(search_string=self.pod_name)
 
@@ -87,7 +129,7 @@ class ClientPodManager(PodManager):
                 self._print_pods(matching_pods)
 
             elif user_input == '2':
-                identifier = await self.get_client_input("\r\n\r\nEnter pod identifier to connect: ")
+                identifier = await self.get_client_input("\r\n\r\nEnter pod identifier to connect >> ")
                 new_pod_name = f"{self.pod_name}-{identifier}"
                 pod = next((pod for pod in matching_pods if pod.metadata.name == new_pod_name), None)
                 if not pod:
@@ -103,11 +145,57 @@ class ClientPodManager(PodManager):
                 if len(matching_pods) >= MAX_PODS_PER_USER:
                     self.process.stdout.write(f"\r\n\r\nYou already have {MAX_PODS_PER_USER} pods.\r\n".encode('utf-8'))
                     continue
-                identifier = await self.get_client_input("\r\n\r\nEnter pod identifier to create: ")
+
+                identifier = await self.get_client_input("\r\n\r\nEnter pod identifier to create >> ")
                 new_pod_name = f"{self.pod_name}-{identifier}"
-                confirm = await self.get_client_input(f"\r\nDo you want to create pod '{new_pod_name}'? [y/n]: ")
+
+                pod = next((pod for pod in matching_pods if pod.metadata.name == new_pod_name), None)
+                if pod:
+                    self.process.stdout.write(f"\r\n\r\nPod '{new_pod_name}' already exist.\r\n".encode('utf-8'))
+                    continue
+
+                custom = await self.get_client_input(f"\r\n\r\nDo you want to customize resources? [y/n] >> ")
+                if custom.lower() in ('y', 'yes'):
+                    image = await self.get_client_input("\r\n\r\nSelect the base image for your container\
+                                                        \r\n1 - Ubuntu 20.04 (default)\
+                                                        \r\n2 - Rocky 9\
+                                                        \r\n3 - Debian 12\
+                                                        \r\nSelect an option >> ")
+                    if image == '1':
+                        image = "Ubuntu 20.04"
+                    elif image == '2':
+                        image = "Rocky 9"
+                    elif image == '2':
+                        image = "Debian 12"
+                    else:
+                        image = None
+                    cpu = await self.get_validated_input(50, 200, unit='m', value_name='CPU')
+                    if cpu == 'q':
+                        continue
+                    mem = await self.get_validated_input(150, 300, unit='Mi', value_name='Memory')
+                    if mem == 'q':
+                        continue
+                    gpu = await self.get_client_input("\r\n\r\nDo you want to allocate GPU? [y/n] >> ")
+                    if gpu.lower() in ('y', 'yes'):
+                        gpu = True
+                    else:
+                        gpu = False
+                else:
+                    image = None
+                    cpu = None
+                    mem = None
+                    gpu = False
+
+                resource_info = (
+                    f"Selected Resources:\r\n"
+                    f"  - Image : {image if image else 'Ubuntu 20.04 (default)'}\r\n"
+                    f"  - CPU : {cpu if cpu else '100m (default)'}\r\n"
+                    f"  - Memory : {mem if mem else '200Mi (default)'}\r\n"
+                    f"  - GPU : {'Yes' if gpu else 'No'}"
+                )
+                confirm = await self.get_client_input(f"\r\n\n{resource_info}\r\nDo you want to create pod '{new_pod_name}'? [y/n] >> ")
                 if confirm.lower() in ('y', 'yes'):
-                    await self.create_pod(username, pod_name=new_pod_name)
+                    await self.create_pod(username, pod_name=new_pod_name, image=image, cpu=cpu, mem=mem, gpu=gpu)
                     self.process.stdout.write(f"\r\nPod '{new_pod_name}' created.\r\n".encode('utf-8'))
                 else:
                     self.process.stdout.write(b"\r\nOperation aborted.\r\n")
@@ -116,12 +204,12 @@ class ClientPodManager(PodManager):
                 if not matching_pods:
                     self.process.stdout.write(b"\r\n\r\nNo pods to delete.\r\n")
                     continue
-                identifier = await self.get_client_input("\r\n\r\nEnter pod identifier to delete: ")
+                identifier = await self.get_client_input("\r\n\r\nEnter pod identifier to delete >> ")
                 new_pod_name = f"{self.pod_name}-{identifier}"
                 if not any(pod.metadata.name == new_pod_name for pod in matching_pods):
                     self.process.stdout.write(f"\r\n\r\nPod '{new_pod_name}' not found.\r\n".encode('utf-8'))
                     continue
-                confirm = await self.get_client_input(f"\r\n\r\nAre you sure you want to delete pod '{new_pod_name}'? [y/n]: ")
+                confirm = await self.get_client_input(f"\r\n\r\nAre you sure you want to delete pod '{new_pod_name}'? [y/n] >> ")
                 if confirm.lower() in ('y', 'yes'):
                     await self.delete_pod(new_pod_name)
                     self.process.stdout.write(f"\r\n\r\nPod '{new_pod_name}' deleted.\r\n".encode('utf-8'))
@@ -158,30 +246,30 @@ class AdminPodManager(PodManager):
     async def pod_management(self):
         while True:
             print("\n[Admin Pod Management]")
-            print("1. List all pods")
-            print("2. Search for pods")
-            print("3. Create pod")
-            print("4. Delete pod")
-            user_input = await asyncio.get_event_loop().run_in_executor(None, input, "Select an option: ")
+            print("1 - List all pods")
+            print("2 - Search for pods")
+            print("3 - Create pod")
+            print("4 - Delete pod")
+            user_input = await asyncio.get_event_loop().run_in_executor(None, input, "Select an option >> ")
             user_input = user_input.strip()
             if user_input == '1':
                 pods = self.list_pods()
                 self._print_pods(pods)
 
             elif user_input == '2':
-                search_string = await asyncio.get_event_loop().run_in_executor(None, input, "Enter search string: ")
+                search_string = await asyncio.get_event_loop().run_in_executor(None, input, "Enter search string >> ")
                 pods = self.list_pods(search_string)
                 self._print_pods(pods)
 
             elif user_input == '3':
-                pod_name = await asyncio.get_event_loop().run_in_executor(None, input, "Enter pod name to create: ")
+                pod_name = await asyncio.get_event_loop().run_in_executor(None, input, "Enter pod name to create >> ")
                 username = pod_name.split('-')[1]
                 await self.create_pod(username, pod_name=pod_name)
                 print(f"Pod '{pod_name}' created.")
 
             elif user_input == '4':
-                pod_name = await asyncio.get_event_loop().run_in_executor(None, input, "Enter pod name to delete: ")
-                confirm = await asyncio.get_event_loop().run_in_executor(None, input, f"Are you sure you want to delete pod '{pod_name}'? [y/n]: ")
+                pod_name = await asyncio.get_event_loop().run_in_executor(None, input, "Enter pod name to delete >> ")
+                confirm = await asyncio.get_event_loop().run_in_executor(None, input, f"Are you sure you want to delete pod '{pod_name}'? [y/n] >> ")
                 if confirm.lower() in ('y', 'yes'):
                     await self.delete_pod(pod_name)
                     print(f"Pod '{pod_name}' deleted.")
