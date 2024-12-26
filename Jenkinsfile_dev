@@ -16,14 +16,14 @@ node {
 
     //dockerfile기반 빌드하는 stage ,git소스 root에 dockerfile이 있어야한다
     stage('Build image'){
-        app = docker.build("harbor.cu.ac.kr/swlabssh/swlabssh_dev", "-f Dockerfile_dev .")
+        app = docker.build("harbor.cu.ac.kr/swlabssh_dev/swlabssh", "-f Dockerfile_dev .")
     }
 
     //docker image를 push하는 stage
     stage('Push image') {
         docker.withRegistry("https://harbor.cu.ac.kr", "harbor") {
             app.push("latest")
-            app.push("${BUILD_NUMBER}")
+            app.push("${env.BUILD_NUMBER}")
         }
     }
 
