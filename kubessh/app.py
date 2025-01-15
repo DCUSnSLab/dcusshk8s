@@ -16,6 +16,8 @@ from kubessh.pod import UserPod, PodState
 from kubessh.authentication import Authenticator
 from kubessh.authentication.github import GitHubAuthenticator
 
+from kubessh.pod_manager import ClientPodManager, AdminPodManager
+
 
 class KubeSSH(Application):
     config_file = Unicode(
@@ -82,14 +84,25 @@ class KubeSSH(Application):
             return 'default'
 
     async def handle_client(self, process):
+
+        # username = process.channel.get_extra_info('username')
+
         username = process.channel.get_extra_info('username').split('-')
         if username and username[0] == 'dcucode':
             username = '-'.join(username[1:])
         else:
             username = '-'.join(username)
         print(username) 
+
         pod = UserPod(parent=self, username=username, namespace=self.default_namespace)
 
+        try:
+            pod_manager = ClientPodManager(process, pod.pod_name, self.default_namespace)
+            new_pod_name = await pod_manager.pod_management()
+
+            pod.pod_name = new_pod_name
+        except Exception as e:
+            print(f"Error in app.py {e}")
 
         spinner = itertools.cycle(['-', '/', '|', '\\'])
 
@@ -146,13 +159,22 @@ class KubeSSH(Application):
 
 app = KubeSSH()
 
-def main():
+async def main():
     print('hello world')
-    loop = asyncio.get_event_loop()
+    #loop = asyncio.get_event_loop()
 
     app.initialize()
-    loop.run_until_complete(app.start())
-    loop.run_forever()
+    #loop.run_until_complete(app.start())
+    #loop.run_forever()
+    pod_manager = AdminPodManager(namespace=app.default_namespace)
+
+    await asyncio.gather(
+        app.start(),
+        pod_manager.pod_management()
+    )
+
 
 if __name__ == '__main__':
-    main()
+    #main()
+    asyncio.run(main())
+
