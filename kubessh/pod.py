@@ -51,6 +51,9 @@ class UserPod(LoggingConfigurable):
             "metadata": {},
             "spec": {
                 "automountServiceAccountToken": False,
+                "nodeSelector": { 
+                    "kubessh": "general_node"
+                },
                 "containers": [
                     {
                         "command": ["/bin/bash", "-c"],
@@ -117,6 +120,7 @@ class UserPod(LoggingConfigurable):
                             },
                     },
                     "storageClassName": "mayastor-normal-3",
+                    #"storageClassName": "openebs-hostpath",
                 },
             },
             
