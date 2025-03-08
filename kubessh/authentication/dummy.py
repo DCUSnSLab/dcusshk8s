@@ -51,7 +51,7 @@ class DummyAuthenticator(Authenticator):
 
         if username.split('-')[0] == 'dcucode':
             # tokenLoginUrl = 'http://203.250.33.85/api/token_auth'
-            tokenLoginUrl = 'http://203.250.33.87:31320/api/token_auth'
+            tokenLoginUrl = 'http://203.250.33.87:30481/api/token_auth' # dcucode dev
             data = {
                 'token': password
             }
@@ -65,7 +65,7 @@ class DummyAuthenticator(Authenticator):
                     return True
             return False
         else:
-            #url = 'http://203.250.33.87:31320/api/login'
+            #url = 'http://203.250.33.87:30481/api/login' # dcucode dev
             url = 'http://203.250.33.85/api/login'
             data = {
                 'username': username,
