@@ -52,8 +52,10 @@ class DummyAuthenticator(Authenticator):
         if username.split('-')[0] == 'dcucode':
             # tokenLoginUrl = 'http://203.250.33.85/api/token_auth'
             tokenLoginUrl = 'http://203.250.33.87:30481/api/token_auth' # dcucode dev
+            real_username = username.split('-', 1)[1]
             data = {
-                'token': password
+                'token': password,
+                'username': real_username
             }
             response = requests.post(tokenLoginUrl, json=data)
             if response.status_code == 200:
