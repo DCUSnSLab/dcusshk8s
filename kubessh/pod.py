@@ -143,7 +143,7 @@ class UserPod(LoggingConfigurable):
                                        "memory": "200Mi",
                            },
                         },
-                         "volumeMounts": [
+                        "volumeMounts": [
                             {
                                 "name": "poddata",
                                 "mountPath": "/usr",
