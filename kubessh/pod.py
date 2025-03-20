@@ -45,7 +45,20 @@ class UserPod(LoggingConfigurable):
     Config from administrators is set via traitlets in config.
     """
     pod_template = Dict(
-        {
+        help="""
+        Template for creating user pods.
+
+        This should be a dict containing a fully specified Kubernetes
+        Pod object. Specific components of it may be changed to
+        match the configuration of the Shell object requested.
+        """,
+        config=True
+    )
+
+
+    @default('pod_template')
+    def _default_pod_template(self):
+        return {
             "apiVersion": "v1",
             "kind": "Pod",
             "metadata": {},
@@ -178,16 +191,8 @@ class UserPod(LoggingConfigurable):
                     }
                 ],
             },
-        },
-        help="""
-        Template for creating user pods.
+       }
 
-        This should be a dict containing a fully specified Kubernetes
-        Pod object. Specific components of it may be changed to
-        match the configuration of the Shell object requested.
-        """,
-        config=True
-    )
 
     pvc_templates = List(
         [
@@ -205,8 +210,8 @@ class UserPod(LoggingConfigurable):
                                     "storage": "5Gi",
                             },
                     },
-                    #"storageClassName": "mayastor-normal-3",
-                    "storageClassName": "openebs-hostpath",
+                    "storageClassName": "mayastor-normal-3",
+                    #"storageClassName": "openebs-hostpath",
                 },
             },
             
@@ -308,7 +313,8 @@ class UserPod(LoggingConfigurable):
     def make_pod_spec(self):
         pod = make_api_object_from_dict(self._expand_all(self.pod_template), k.V1Pod)
         pod.metadata.name = self.pod_name
-        print(pod)
+        print(f"Creating '{self.pod_name}' pod...")
+        #print(pod)
         pod.spec.volumes[0].persistent_volume_claim = k.V1PersistentVolumeClaimVolumeSource(claim_name = self.pod_name + '-pvc')
         if pod.metadata.labels is None:
             pod.metadata.labels = {}
@@ -317,11 +323,12 @@ class UserPod(LoggingConfigurable):
         return pod
 
     def make_pvc_spec(self, template):
-        print('test pvc')
-        print(template)
+        print(f"Creating '{self.pod_name}' pvc...")
+        #print('test pvc')
+        #print(template)
         pvc = make_api_object_from_dict(self._expand_all(template), k.V1PersistentVolumeClaim)
         pvc.metadata.name = self.pod_name + '-pvc'
-        print(pvc)
+        #print(pvc)
         if pvc.metadata.labels is None:
             pvc.metadata.labels = {}
         pvc.metadata.labels.update(self.required_labels)
@@ -348,6 +355,7 @@ class UserPod(LoggingConfigurable):
                 raise
 
         if pod and pod.status.phase == 'Running':
+            print(f"'{self.pod_name}' is already exists")
             # Pod exists, and is running. Nothing to do
             self.pod = pod
             yield PodState.RUNNING
@@ -363,7 +371,7 @@ class UserPod(LoggingConfigurable):
                 pod.metadata.namespace, body=k.V1DeleteOptions(grace_period_seconds=0)
             )
             pod = None
-        print(self.pod_template)
+        #print(self.pod_template)
         if not pod:
             # There is no pod, so start one!
             yield PodState.STARTING
@@ -403,6 +411,7 @@ class UserPod(LoggingConfigurable):
                 pod.metadata.name, pod.metadata.namespace
             )
         yield PodState.RUNNING
+        print(f"Pod '{self.pod_name}' Create Complete!!")
 
     async def execute(self, ssh_process):
         command = shlex.split(ssh_process.command) if ssh_process.command else ["/bin/bash", "-l"]
