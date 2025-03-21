@@ -54,10 +54,75 @@ class UserPod(LoggingConfigurable):
                 "nodeSelector": { 
                     "kubessh": "general_node"
                 },
+                "initContainers": [
+                    {
+                        "name": "init-setup",
+                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
+                        "command": ["/bin/bash","-c"],
+                        "args": [
+                            """
+                            mkdir -p /mnt/usr /mnt/lib /mnt/etc /mnt/var/lib/dpkg /mnt/var/lib/apt /mnt/var/cache/apt /mnt/home;
+                            if [ ! -f /mnt/usr/bin/bash ]; then
+                             cp -a /usr/* /mnt/usr/;
+                             cp -a /lib/* /mnt/lib/;
+                             cp -a /etc/* /mnt/etc/;
+                             cp -a /var/* /mnt/var/;
+                             chmod 4755 /mnt/usr/bin/sudo;
+                            fi;
+                            chmod 755 /mnt /mnt/home /mnt/usr /mnt/lib /mnt/etc /mnt/var
+                            """
+                        ],
+                        "env": [
+                            {
+                                "name": "PATH",
+                                "value": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+                            }
+                        ],
+                        "securityContext": {
+                            "runAsUser": 0
+                        },
+                        "volumeMounts": [
+                            {
+                                "name": "poddata",
+                                "mountPath": "/mnt/usr",
+                                "subPath": "usr"
+                            },
+                            {
+                                "name": "poddata",
+                                "mountPath": "/mnt/lib",
+                                "subPath": "lib"
+                            },
+                            {
+                                "name": "poddata",
+                                "mountPath": "/mnt/etc",
+                                "subPath": "etc"
+                            },
+                            {
+                                "name": "poddata",
+                                "mountPath": "/mnt/var",
+                                "subPath": "var"
+                            },
+                            {
+                                "name": "poddata",
+                                "mountPath": "/mnt/home",
+                                "subPath": "home"
+                            }
+                        ]
+                    }
+                ],
                 "containers": [
                     {
                         "command": ["/bin/bash", "-c"],
-                        "args": ["sudo chown dcuuser:dcuuser /home/dcuuser;cp /etc/skel/.* /home/dcuuser/;echo -e 'if has (\"syntax\")\\n    syntax on\\nendif\\n\\nset autoindent\\nset cindent\\nset nu\\n\\nset smartindent\\nset tabstop=4\\nset shiftwidth=4' > /home/dcuuser/.vimrc;while true; do echo hello; sleep 10;done"],
+                        "args": [
+                            """
+                            sudo chown dcuuser:dcuuser /home/dcuuser;
+                            cp -n /etc/skel/.* /home/dcuuser/;
+                            if [ ! -f /home/dcuuser/.vimrc ]; then
+                                echo -e 'if has ("syntax")\\n    syntax on\\nendif\\n\\nset autoindent\\nset cindent\\nset nu\\n\\nset smartindent\\nset tabstop=4\\nset shiftwidth=4' > /home/dcuuser/.vimrc;
+                            fi;
+                            while true; do echo hello; sleep 10; done
+                            """
+                        ],
                         "env": [
                            {
                               "name": "PATH",
@@ -80,10 +145,31 @@ class UserPod(LoggingConfigurable):
                         },
                         "volumeMounts": [
                             {
+                                "name": "poddata",
+                                "mountPath": "/usr",
+                                "subPath": "usr"
+                            },
+                            {
+                                "name": "poddata",
+                                "mountPath": "/lib",
+                                "subPath": "lib"
+                            },
+                            {
+                                "name": "poddata",
+                                "mountPath": "/etc",
+                                "subPath": "etc"
+                            },
+                            {
+                                "name": "poddata",
+                                "mountPath": "/var",
+                                "subPath": "var"
+                            },
+                            {
+                                "name": "poddata",
                                 "mountPath": "/home",
-                                "name": "poddata"
+                                "subPath": "home"
                             }
-                        ],
+                        ]
                     }
                 ],
                 "volumes": [
@@ -116,11 +202,11 @@ class UserPod(LoggingConfigurable):
                     "volumeMode": "Filesystem",
                     "resources": {
                             "requests": {
-                                    "storage": "3Gi",
+                                    "storage": "5Gi",
                             },
                     },
-                    "storageClassName": "mayastor-normal-3",
-                    #"storageClassName": "openebs-hostpath",
+                    #"storageClassName": "mayastor-normal-3",
+                    "storageClassName": "openebs-hostpath",
                 },
             },
             
