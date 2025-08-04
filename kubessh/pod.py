@@ -120,7 +120,7 @@ class UserPod(LoggingConfigurable):
                             if [ ! -f /home/dcuuser/.vimrc ]; then
                                 echo -e 'if has ("syntax")\\n    syntax on\\nendif\\n\\nset autoindent\\nset cindent\\nset nu\\n\\nset smartindent\\nset tabstop=4\\nset shiftwidth=4' > /home/dcuuser/.vimrc;
                             fi;
-                            while true; sleep 10; done
+                            while true; do sleep 10; done
                             """
                         ],
                         "env": [
