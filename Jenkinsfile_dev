@@ -27,10 +27,10 @@ node {
         }
     }
 
-    //stage('Kubernetes deploy') {
-    //    sh "kubectl delete -f /services/dcucode/oj-backend_only_con.yaml -n dcucode-test"
-    //    sh "kubectl apply -f /services/dcucode/oj-backend_only_con.yaml -n dcucode-test"
-    //}
+    stage('Kubernetes deploy') {
+        sh "kubectl delete -f /services/dcussh_yaml/kubessh_dev_con.yaml -n swlabpods"
+        sh "kubectl apply -f /services/dcussh_yaml/kubessh_dev_con.yaml -n swlabpods"
+    }
 
     stage('Complete') {
         sh "echo 'The end'"
