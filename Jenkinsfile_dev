@@ -28,8 +28,8 @@ node {
     }
 
     stage('Kubernetes deploy') {
-        sh "kubectl delete -f /services/dcussh_yaml/kubessh_dev_con.yaml -n swlabpods"
-        sh "kubectl apply -f /services/dcussh_yaml/kubessh_dev_con.yaml -n swlabpods"
+        sh "kubectl delete -f /services/dcussh_yaml/kubessh_dev_con.yaml -n swlabpods-dev"
+        sh "kubectl apply -f /services/dcussh_yaml/kubessh_dev_con.yaml -n swlabpods-dev"
     }
 
     stage('Complete') {
