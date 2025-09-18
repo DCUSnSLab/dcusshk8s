@@ -57,7 +57,9 @@ class UserPod(LoggingConfigurable):
                 "initContainers": [
                     {
                         "name": "init-setup",
-                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
+                        #"image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
+                        "image": "harbor.cu.ac.kr/swlabpods_test/userpod:latest",
+                        "imagePullPolicy": "Always",
                         "command": ["/bin/bash","-c"],
                         "args": [
                             """
@@ -67,6 +69,7 @@ class UserPod(LoggingConfigurable):
                              cp -a /lib/* /mnt/lib/;
                              cp -a /etc/* /mnt/etc/;
                              cp -a /var/* /mnt/var/;
+                             cp -a /home/* /mnt/home/;
                              chmod 4755 /mnt/usr/bin/sudo;
                             fi;
                             chmod 755 /mnt /mnt/home /mnt/usr /mnt/lib /mnt/etc /mnt/var
@@ -129,7 +132,8 @@ class UserPod(LoggingConfigurable):
                               "value": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                            }
                         ],
-                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
+                        #"image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
+                        "image": "harbor.cu.ac.kr/swlabpods_test/userpod:latest",
                         "name": "shell",
                         "stdin": True,
                         "tty": True,
@@ -168,6 +172,44 @@ class UserPod(LoggingConfigurable):
                                 "name": "poddata",
                                 "mountPath": "/home",
                                 "subPath": "home"
+                            },
+                            {
+                                "name": "socket-volume",
+                                "mountPath": "/tmp/sockets"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "dynamic-allocator-sidecar",
+                        "image": "harbor.cu.ac.kr/k8s_dynamic_allocator/sidecar:latest",
+                        "env": [
+                            {
+                                "name": "SOCKET_PATH",
+                                "value": "/tmp/sockets/allocator.sock"
+                            },
+                            {
+                                "name": "NAMESPACE",
+                                "valueFrom": {
+                                    "fieldRef": {
+                                        "fieldPath": "metadata.namespace"
+                                    }
+                                }
+                            }
+                        ],
+                        "resources": {
+                            "requests": {
+                                "cpu": "10m",
+                                "memory": "32Mi"
+                            },
+                            "limits": {
+                                "cpu": "50m",
+                                "memory": "64Mi"
+                            }
+                        },
+                        "volumeMounts": [
+                            {
+                                "name": "socket-volume",
+                                "mountPath": "/tmp/sockets"
                             }
                         ]
                     }
@@ -175,6 +217,10 @@ class UserPod(LoggingConfigurable):
                 "volumes": [
                     {
                         "name": "poddata",
+                    },
+                    {
+                        "name": "socket-volume",
+                        "emptyDir": {}
                     }
                 ],
             },
@@ -205,8 +251,8 @@ class UserPod(LoggingConfigurable):
                                     "storage": "5Gi",
                             },
                     },
-                    "storageClassName": "normal-r3",
-                    #"storageClassName": "openebs-hostpath",
+                    #"storageClassName": "normal-r3",
+                    "storageClassName": "openebs-hostpath",
                 },
             },
             
