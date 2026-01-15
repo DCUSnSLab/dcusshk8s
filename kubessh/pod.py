@@ -57,7 +57,8 @@ class UserPod(LoggingConfigurable):
                 "initContainers": [
                     {
                         "name": "init-setup",
-                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
+                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:sshfs-test",
+                        # "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
                         "command": ["/bin/bash","-c"],
                         "args": [
                             """
@@ -151,7 +152,8 @@ class UserPod(LoggingConfigurable):
                               }
                            }
                         ],
-                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
+                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:sshfs-test",
+                        # "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
                         "name": "shell",
                         "stdin": True,
                         "tty": True,
