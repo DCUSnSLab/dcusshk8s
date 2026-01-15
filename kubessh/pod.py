@@ -150,6 +150,10 @@ class UserPod(LoggingConfigurable):
                                       "fieldPath": "metadata.name"
                                   }
                               }
+                           },
+                           {
+                              "name": "USER",
+                              "value": "{username}",
                            }
                         ],
                         "image": "harbor.cu.ac.kr/swlabpods/dbuntu:sshfs-test",
