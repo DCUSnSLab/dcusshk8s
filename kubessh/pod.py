@@ -445,6 +445,12 @@ class UserPod(LoggingConfigurable):
 
     async def execute(self, ssh_process):
         command = shlex.split(ssh_process.command) if ssh_process.command else ["/bin/bash", "-l"]
+        
+        # run 명령어 분기 처리
+        if ssh_process.command and ssh_process.command.startswith("run "):
+            await self._execute_on_backend(ssh_process)
+            return
+        
         tty_args = ['--tty'] if ssh_process.get_terminal_type() else []
         kubectl_command = [
             'kubectl',
@@ -504,3 +510,93 @@ class UserPod(LoggingConfigurable):
             await ssh_process.redirect(stdin=process.stdin, stdout=process.stdout, stderr=process.stderr)
 
             ssh_process.exit(await process.wait())
+
+    async def _execute_on_backend(self, ssh_process):
+        """
+        Backend Pod에서 명령 실행 (Interactive Mode)
+        
+        1. Controller에 interactive/start 요청
+        2. Backend Pod에 chroot PTY 연결
+        3. 종료 시 interactive/end 호출
+        """
+        import httpx
+        
+        actual_command = ssh_process.command[4:]  # "run " 제거
+        controller_url = "http://controller-service:9001"
+        
+        try:
+            # 1. Controller에 interactive/start 요청
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{controller_url}/api/interactive/start/",
+                    json={"frontend_pod": self.pod_name}
+                )
+                result = response.json()
+            
+            if result.get("status") != "success":
+                ssh_process.stdout.write(f"Error: {result.get('message')}\n".encode())
+                ssh_process.exit(1)
+                return
+            
+            backend_pod = result["backend_pod"]
+            self.log.info(f"Interactive session started: {backend_pod}")
+            
+            # 2. Backend Pod에 chroot PTY 연결
+            tty_args = ['--tty'] if ssh_process.get_terminal_type() else []
+            kubectl_command = [
+                'kubectl',
+                '--namespace', self.namespace,
+                'exec',
+                '--stdin'
+            ] + tty_args + [
+                backend_pod,
+                '--',
+                'chroot', '/mnt/rootfs', '/bin/bash', '-c', actual_command
+            ]
+            
+            if ssh_process.get_terminal_type():
+                ts = ssh_process.get_terminal_size()
+                process = PtyProcess.spawn(argv=kubectl_command, dimensions=(ts[1], ts[0]))
+                await ssh_process.redirect(process, process)
+                
+                loop = asyncio.get_event_loop()
+                shell_completed = loop.run_in_executor(ThreadPoolExecutor(1), process.wait)
+                read_stdin = asyncio.ensure_future(ssh_process.stdin.read())
+                
+                while not ssh_process.stdin.at_eof() and not shell_completed.done():
+                    try:
+                        if read_stdin.done():
+                            read_stdin = asyncio.ensure_future(ssh_process.stdin.read())
+                        done, _ = await asyncio.wait([read_stdin, shell_completed], return_when=asyncio.FIRST_COMPLETED)
+                        for future in done:
+                            await future
+                    except asyncssh.misc.TerminalSizeChanged as exc:
+                        process.setwinsize(exc.height, exc.width)
+                
+                if ssh_process.stdin.at_eof() and not shell_completed.done():
+                    await loop.run_in_executor(ThreadPoolExecutor(1), lambda: process.terminate(force=True))
+                
+                exit_code = shell_completed.result()
+            else:
+                process = await asyncio.create_subprocess_exec(
+                    *kubectl_command,
+                    stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                )
+                await ssh_process.redirect(stdin=process.stdin, stdout=process.stdout, stderr=process.stderr)
+                exit_code = await process.wait()
+            
+            # 3. 종료 시 interactive/end 호출
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(
+                    f"{controller_url}/api/interactive/end/",
+                    json={"backend_pod": backend_pod}
+                )
+            
+            self.log.info(f"Interactive session ended: {backend_pod}")
+            ssh_process.exit(exit_code)
+            
+        except Exception as e:
+            self.log.error(f"Backend execution error: {e}")
+            ssh_process.stdout.write(f"Error: {str(e)}\n".encode())
+            ssh_process.exit(1)
+

@@ -5,3 +5,4 @@ escapism
 traitlets
 pycryptodome
 ruamel.yaml
+httpx
