@@ -20,3 +20,11 @@ WORKDIR /home/dcuuser
 RUN git config --global user.name "dcuuser" # buildkit
 RUN git config --global user.email dcuuser@test.com # buildkit
 RUN echo 'set nu' > /home/dcuuser/.vimrc # buildkit
+
+# run 스크립트 설치 (root로 전환)
+USER root
+RUN apt-get update && apt-get install -y jq && rm -rf /var/lib/apt/lists/*
+COPY run /usr/local/bin/run
+RUN chmod +x /usr/local/bin/run
+
+USER dcuuser

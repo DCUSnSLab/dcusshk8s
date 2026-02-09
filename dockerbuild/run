@@ -1,0 +1,134 @@
+#!/bin/bash
+#
+# run - Backend Pod에서 명령 실행
+#
+# 사용법: run <command>
+# 예시: run python tmp.py
+#
+
+set -e
+
+CONTROLLER_URL="http://controller-service:9001"
+RUN_DIR="$HOME/.run"
+FRONTEND_POD="${HOSTNAME}"
+
+# 색상
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+# 사용법 출력
+usage() {
+    echo "Usage: run <command>"
+    echo "Example: run python tmp.py"
+    exit 1
+}
+
+# 에러 처리
+error() {
+    echo -e "${RED}[ERROR]${NC} $1" >&2
+    exit 1
+}
+
+# 정리 함수
+cleanup() {
+    if [ -n "$BACKEND_POD" ]; then
+        echo -e "\n${YELLOW}[INFO]${NC} Releasing backend..."
+        curl -s -X POST "$CONTROLLER_URL/api/pool/release/" \
+            -H "Content-Type: application/json" \
+            -d "{\"backend_pod\": \"$BACKEND_POD\"}" > /dev/null 2>&1 || true
+    fi
+    rm -rf "$RUN_DIR" 2>/dev/null || true
+}
+
+trap cleanup EXIT
+
+# 인자 확인
+if [ $# -eq 0 ]; then
+    usage
+fi
+
+COMMAND="$*"
+
+echo -e "${GREEN}[INFO]${NC} Requesting backend for: $COMMAND"
+
+# 1. .run 디렉터리 생성
+mkdir -p "$RUN_DIR"
+echo "pending" > "$RUN_DIR/status"
+
+# 2. Controller에 Backend 요청
+RESPONSE=$(curl -s -X POST "$CONTROLLER_URL/api/execute/" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\": \"$(whoami)\", \"command\": \"$COMMAND\", \"frontend_pod\": \"$FRONTEND_POD\"}")
+
+STATUS=$(echo "$RESPONSE" | jq -r '.status' 2>/dev/null)
+
+if [ "$STATUS" != "success" ]; then
+    MESSAGE=$(echo "$RESPONSE" | jq -r '.message' 2>/dev/null)
+    error "Failed to allocate backend: $MESSAGE"
+fi
+
+BACKEND_POD=$(echo "$RESPONSE" | jq -r '.backend_pod')
+BACKEND_IP=$(echo "$RESPONSE" | jq -r '.backend_ip')
+
+echo -e "${GREEN}[INFO]${NC} Backend allocated: $BACKEND_POD ($BACKEND_IP)"
+echo -e "${GREEN}[INFO]${NC} Waiting for execution..."
+
+# 3. 상태 파일 초기화
+echo "running" > "$RUN_DIR/status"
+touch "$RUN_DIR/stdin"
+touch "$RUN_DIR/stdout"
+
+# 4. 출력 읽기 루프 (백그라운드)
+LAST_POS=0
+(
+    while true; do
+        if [ -f "$RUN_DIR/stdout" ]; then
+            CURRENT_SIZE=$(stat -c%s "$RUN_DIR/stdout" 2>/dev/null || echo 0)
+            if [ "$CURRENT_SIZE" -gt "$LAST_POS" ]; then
+                tail -c +$((LAST_POS + 1)) "$RUN_DIR/stdout"
+                LAST_POS=$CURRENT_SIZE
+            fi
+        fi
+        
+        # 상태 확인
+        if [ -f "$RUN_DIR/status" ]; then
+            CURRENT_STATUS=$(cat "$RUN_DIR/status")
+            if [ "$CURRENT_STATUS" = "completed" ] || [ "$CURRENT_STATUS" = "error" ]; then
+                # 마지막 출력 읽기
+                sleep 0.2
+                if [ -f "$RUN_DIR/stdout" ]; then
+                    CURRENT_SIZE=$(stat -c%s "$RUN_DIR/stdout" 2>/dev/null || echo 0)
+                    if [ "$CURRENT_SIZE" -gt "$LAST_POS" ]; then
+                        tail -c +$((LAST_POS + 1)) "$RUN_DIR/stdout"
+                    fi
+                fi
+                break
+            fi
+        fi
+        sleep 0.1
+    done
+) &
+OUTPUT_PID=$!
+
+# 5. 입력 전달 루프
+while true; do
+    # 상태 확인
+    if [ -f "$RUN_DIR/status" ]; then
+        CURRENT_STATUS=$(cat "$RUN_DIR/status")
+        if [ "$CURRENT_STATUS" = "completed" ] || [ "$CURRENT_STATUS" = "error" ]; then
+            break
+        fi
+    fi
+    
+    # 입력 읽기 (타임아웃 0.5초)
+    if read -t 0.5 -r INPUT_LINE; then
+        echo "$INPUT_LINE" >> "$RUN_DIR/stdin"
+    fi
+done
+
+# 출력 프로세스 종료 대기
+wait $OUTPUT_PID 2>/dev/null || true
+
+echo -e "\n${GREEN}[INFO]${NC} Execution completed."

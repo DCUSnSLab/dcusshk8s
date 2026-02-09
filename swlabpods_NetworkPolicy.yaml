@@ -9,6 +9,18 @@ spec:
   policyTypes:
   - Egress
   egress:
+  # Controller Service 접근 허용
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: swlabpods
+      podSelector:
+        matchLabels:
+          app: controller
+    ports:
+    - protocol: TCP
+      port: 9001
+  # 기존 외부 트래픽 규칙
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
