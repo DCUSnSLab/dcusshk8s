@@ -156,7 +156,7 @@ class UserPod(LoggingConfigurable):
                               "value": "{username}",
                            }
                         ],
-                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:sshfs-test",
+                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:interactive",
                         # "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
                         "name": "shell",
                         "stdin": True,

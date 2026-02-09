@@ -21,10 +21,10 @@ RUN git config --global user.name "dcuuser" # buildkit
 RUN git config --global user.email dcuuser@test.com # buildkit
 RUN echo 'set nu' > /home/dcuuser/.vimrc # buildkit
 
-# run 스크립트 설치 (root로 전환)
+# run script install (switch to root)
 USER root
-RUN apt-get update && apt-get install -y jq && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y jq dos2unix && rm -rf /var/lib/apt/lists/*
 COPY run /usr/local/bin/run
-RUN chmod +x /usr/local/bin/run
+RUN dos2unix /usr/local/bin/run && chmod +x /usr/local/bin/run
 
 USER dcuuser
