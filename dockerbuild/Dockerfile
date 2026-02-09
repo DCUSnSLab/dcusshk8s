@@ -23,7 +23,7 @@ RUN echo 'set nu' > /home/dcuuser/.vimrc # buildkit
 
 # run script install (switch to root)
 USER root
-RUN apt-get update && apt-get install -y jq dos2unix && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y jq dos2unix netcat-openbsd python3-requests && rm -rf /var/lib/apt/lists/*
 COPY run /usr/local/bin/run
 RUN dos2unix /usr/local/bin/run && chmod +x /usr/local/bin/run
 

@@ -1,134 +1,167 @@
-#!/bin/bash
-#
-# run - Execute command on Backend Pod
-#
-# Usage: run <command>
-# Example: run python tmp.py
-#
+#!/usr/bin/env python3
+import sys
+import os
+import socket
+import select
+import termios
+import tty
+import json
+import requests
+import signal
+import time
+import struct
+import fcntl
 
-set -e
-
-CONTROLLER_URL="http://controller-service:9001"
-RUN_DIR="$HOME/.run"
-FRONTEND_POD="${HOSTNAME}"
+# Configuration
+CONTROLLER_URL = "http://controller-service:9001"
+RUN_DIR = os.path.expanduser("~/.run")
+FRONTEND_POD = os.getenv("HOSTNAME", "unknown")
+TCP_PORT = 8081
 
 # Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+GREEN = '\033[0;32m'
+RED = '\033[0;31m'
+YELLOW = '\033[1;33m'
+RESET = '\033[0m'
 
-# Usage
-usage() {
-    echo "Usage: run <command>"
-    echo "Example: run python tmp.py"
-    exit 1
-}
+backend_pod = None
 
-# Error handler
-error() {
-    echo -e "${RED}[ERROR]${NC} $1" >&2
-    exit 1
-}
+def cleanup(signum=None, frame=None):
+    if backend_pod:
+        print(f"\n{YELLOW}[INFO]{RESET} Releasing backend...")
+        try:
+            requests.post(
+                f"{CONTROLLER_URL}/api/pool/release/",
+                json={"backend_pod": backend_pod},
+                timeout=2
+            )
+        except:
+            pass
+    sys.exit(0)
 
-# Cleanup function
-cleanup() {
-    if [ -n "$BACKEND_POD" ]; then
-        echo -e "\n${YELLOW}[INFO]${NC} Releasing backend..."
-        curl -s -X POST "$CONTROLLER_URL/api/pool/release/" \
-            -H "Content-Type: application/json" \
-            -d "{\"backend_pod\": \"$BACKEND_POD\"}" > /dev/null 2>&1 || true
-    fi
-    rm -rf "$RUN_DIR" 2>/dev/null || true
-}
+def get_terminal_size():
+    try:
+        rows, cols = struct.unpack('hh', fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, '1234'))
+        return rows, cols
+    except:
+        return 24, 80
 
-trap cleanup EXIT
+def get_terminal_settings():
+    try:
+        attrs = termios.tcgetattr(sys.stdin.fileno())
+        verase = attrs[6][termios.VERASE]
+        # verase는 bytes 또는 int일 수 있음
+        if isinstance(verase, bytes) and len(verase) == 1:
+            verase_val = ord(verase)
+        elif isinstance(verase, int):
+            verase_val = verase
+        else:
+            verase_val = 127  # DEL 기본값
+        return {
+            "verase": verase_val
+        }
+    except:
+        return {"verase": 127}
 
-# Check arguments
-if [ $# -eq 0 ]; then
-    usage
-fi
-
-COMMAND="$*"
-
-echo -e "${GREEN}[INFO]${NC} Requesting backend for: $COMMAND"
-
-# 1. Create .run directory
-mkdir -p "$RUN_DIR"
-echo "pending" > "$RUN_DIR/status"
-
-# 2. Request backend from Controller
-RESPONSE=$(curl -s -X POST "$CONTROLLER_URL/api/execute/" \
-    -H "Content-Type: application/json" \
-    -d "{\"username\": \"$(whoami)\", \"command\": \"$COMMAND\", \"frontend_pod\": \"$FRONTEND_POD\"}")
-
-STATUS=$(echo "$RESPONSE" | jq -r '.status' 2>/dev/null)
-
-if [ "$STATUS" != "success" ]; then
-    MESSAGE=$(echo "$RESPONSE" | jq -r '.message' 2>/dev/null)
-    error "Failed to allocate backend: $MESSAGE"
-fi
-
-BACKEND_POD=$(echo "$RESPONSE" | jq -r '.backend_pod')
-BACKEND_IP=$(echo "$RESPONSE" | jq -r '.backend_ip')
-
-echo -e "${GREEN}[INFO]${NC} Backend allocated: $BACKEND_POD ($BACKEND_IP)"
-echo -e "${GREEN}[INFO]${NC} Waiting for execution..."
-
-# 3. Initialize status files
-echo "running" > "$RUN_DIR/status"
-touch "$RUN_DIR/stdin"
-touch "$RUN_DIR/stdout"
-
-# 4. Output reading loop (background)
-LAST_POS=0
-(
-    while true; do
-        if [ -f "$RUN_DIR/stdout" ]; then
-            CURRENT_SIZE=$(stat -c%s "$RUN_DIR/stdout" 2>/dev/null || echo 0)
-            if [ "$CURRENT_SIZE" -gt "$LAST_POS" ]; then
-                tail -c +$((LAST_POS + 1)) "$RUN_DIR/stdout"
-                LAST_POS=$CURRENT_SIZE
-            fi
-        fi
-        
-        # Check status
-        if [ -f "$RUN_DIR/status" ]; then
-            CURRENT_STATUS=$(cat "$RUN_DIR/status")
-            if [ "$CURRENT_STATUS" = "completed" ] || [ "$CURRENT_STATUS" = "error" ]; then
-                # Read final output
-                sleep 0.2
-                if [ -f "$RUN_DIR/stdout" ]; then
-                    CURRENT_SIZE=$(stat -c%s "$RUN_DIR/stdout" 2>/dev/null || echo 0)
-                    if [ "$CURRENT_SIZE" -gt "$LAST_POS" ]; then
-                        tail -c +$((LAST_POS + 1)) "$RUN_DIR/stdout"
-                    fi
-                fi
-                break
-            fi
-        fi
-        sleep 0.1
-    done
-) &
-OUTPUT_PID=$!
-
-# 5. Input forwarding loop
-while true; do
-    # Check status
-    if [ -f "$RUN_DIR/status" ]; then
-        CURRENT_STATUS=$(cat "$RUN_DIR/status")
-        if [ "$CURRENT_STATUS" = "completed" ] || [ "$CURRENT_STATUS" = "error" ]; then
-            break
-        fi
-    fi
+def main():
+    global backend_pod
     
-    # Read input (0.5s timeout)
-    if read -t 0.5 -r INPUT_LINE; then
-        echo "$INPUT_LINE" >> "$RUN_DIR/stdin"
-    fi
-done
+    if len(sys.argv) < 2:
+        print(f"Usage: run <command>")
+        sys.exit(1)
+        
+    command = " ".join(sys.argv[1:])
+    
+    # 1. Request Backend
+    print(f"{GREEN}[INFO]{RESET} Requesting backend for: {command}")
+    
+    try:
+        response = requests.post(
+            f"{CONTROLLER_URL}/api/execute/",
+            json={
+                "username": os.getenv("USER", "unknown"),
+                "command": command,
+                "frontend_pod": FRONTEND_POD
+            },
+            timeout=10
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        if data.get("status") != "success":
+            print(f"{RED}[ERROR]{RESET} {data.get('message')}")
+            sys.exit(1)
+            
+        backend_pod = data["backend_pod"]
+        backend_ip = data["backend_ip"]
+        tcp_port = data.get("tcp_port", TCP_PORT)
+        
+        print(f"{GREEN}[INFO]{RESET} Backend allocated: {backend_pod} ({backend_ip})")
+        print(f"{GREEN}[INFO]{RESET} Connecting to backend...")
+        
+    except Exception as e:
+        print(f"{RED}[ERROR]{RESET} Failed to allocate backend: {e}")
+        sys.exit(1)
 
-# Wait for output process
-wait $OUTPUT_PID 2>/dev/null || true
+    # 2. Register Cleanup
+    signal.signal(signal.SIGINT, cleanup)
+    signal.signal(signal.SIGTERM, cleanup)
+    
+    # 3. Connect TCP
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.connect((backend_ip, int(tcp_port)))
+        
+        # 4. Negotiate Settings
+        rows, cols = get_terminal_size()
+        settings = get_terminal_settings()
+        
+        header = {
+            "command": command,
+            "rows": rows,
+            "cols": cols,
+            "term": os.getenv("TERM", "xterm-256color"),
+            "settings": settings
+        }
+        
+        # Send Header (JSON line)
+        sock.sendall(f"{json.dumps(header)}\n".encode('utf-8'))
+        
+        # 5. Interactive Loop (Raw Mode)
+        old_tty = termios.tcgetattr(sys.stdin)
+        try:
+            tty.setraw(sys.stdin.fileno())
+            stdin_fd = sys.stdin.fileno()
+            stdout_fd = sys.stdout.fileno()
 
-echo -e "\n${GREEN}[INFO]${NC} Execution completed."
+            while True:
+                r, _, _ = select.select([sock, stdin_fd], [], [])
+
+                if sock in r:
+                    data = sock.recv(4096)
+                    if not data:
+                        break
+                    os.write(stdout_fd, data)
+
+                if stdin_fd in r:
+                    data = os.read(stdin_fd, 1024)
+                    if not data:
+                        break
+                    sock.sendall(data)
+                    
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSANOW, old_tty)
+            print()
+            
+    except Exception as e:
+        try:
+            termios.tcsetattr(sys.stdin, termios.TCSANOW, old_tty)
+        except:
+            pass
+        print(f"\n{RED}[ERROR]{RESET} Connection error: {e}")
+    finally:
+        sock.close()
+        cleanup()
+
+if __name__ == "__main__":
+    main()

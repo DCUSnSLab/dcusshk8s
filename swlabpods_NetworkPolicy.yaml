@@ -20,6 +20,17 @@ spec:
     ports:
     - protocol: TCP
       port: 9001
+  # Backend Pod 직접 TCP 연결 허용 (터미널)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: swlabpods
+      podSelector:
+        matchLabels:
+          app: backend
+    ports:
+    - protocol: TCP
+      port: 8081
   # 기존 외부 트래픽 규칙
   - to:
     - ipBlock:
