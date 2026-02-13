@@ -11,6 +11,8 @@ import signal
 import time
 import struct
 import fcntl
+import shlex
+
 
 # Configuration
 CONTROLLER_URL = "http://controller-service:9001"
@@ -70,7 +72,9 @@ def main():
         print(f"Usage: run <command>")
         sys.exit(1)
         
-    command = " ".join(sys.argv[1:])
+    # [FIX] 단순 join 대신 shlex.quote를 사용하여 인자들의 쿼팅(Quoting)을 보존
+    # 예: run python -c "print(1)" -> run python -c 'print(1)' 로 변환되어 Backend에 전달됨
+    command = " ".join(shlex.quote(arg) for arg in sys.argv[1:])
     
     # 1. Request Backend
     print(f"{GREEN}[INFO]{RESET} Requesting backend for: {command}")
