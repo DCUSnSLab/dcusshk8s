@@ -8,15 +8,14 @@ import tty
 import json
 import requests
 import signal
-import time
 import struct
 import fcntl
 import shlex
+import subprocess
 
 
 # Configuration
 CONTROLLER_URL = "http://controller-service:9001"
-RUN_DIR = os.path.expanduser("~/.run")
 FRONTEND_POD = os.getenv("HOSTNAME", "unknown")
 TCP_PORT = 8081
 
@@ -27,6 +26,7 @@ YELLOW = '\033[1;33m'
 RESET = '\033[0m'
 
 backend_pod = None
+
 
 def cleanup(signum=None, frame=None):
     if backend_pod:
@@ -41,12 +41,14 @@ def cleanup(signum=None, frame=None):
             pass
     sys.exit(0)
 
+
 def get_terminal_size():
     try:
         rows, cols = struct.unpack('hh', fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, '1234'))
         return rows, cols
     except:
         return 24, 80
+
 
 def get_terminal_settings():
     try:
@@ -65,20 +67,63 @@ def get_terminal_settings():
     except:
         return {"verase": 127}
 
+
+def fix_ownership(marker_file):
+    """Backend가 생성/수정한 파일의 소유권을 현재 사용자로 복구"""
+    try:
+        home = os.path.expanduser("~")
+
+        if not os.path.exists(home):
+            return
+
+        # 기본 제외 목록
+        ignores = [".git", ".hg", ".svn", "node_modules", "venv", ".env", "__pycache__"]
+
+        # ~/.runignore에서 추가 제외 목록 로드
+        runignore_path = os.path.join(home, ".runignore")
+        if os.path.exists(runignore_path):
+            try:
+                with open(runignore_path, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            ignores.append(line)
+            except:
+                pass
+
+        # find 명령어 구성: Marker보다 새로운 파일만 선별하여 소유권 변경
+        find_cmd = ["find", home]
+        for ignore in ignores:
+            find_cmd.extend(["-name", ignore, "-prune", "-o"])
+        find_cmd.extend([
+            "-newer", marker_file,
+            "-exec", "sudo", "chown", f"{os.getuid()}:{os.getgid()}", "{}", "+"
+        ])
+
+        subprocess.run(
+            find_cmd,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+    except:
+        pass
+
+
 def main():
     global backend_pod
-    
+
     if len(sys.argv) < 2:
         print(f"Usage: run <command>")
         sys.exit(1)
-        
-    # [FIX] 단순 join 대신 shlex.quote를 사용하여 인자들의 쿼팅(Quoting)을 보존
-    # 예: run python -c "print(1)" -> run python -c 'print(1)' 로 변환되어 Backend에 전달됨
+
+    # 단순 join 대신 shlex.quote를 사용하여 인자들의 쿼팅(Quoting) 보존
+    # 예: run python -c "print(1)" -> run python -c 'print(1)' 로 변환되어 Backend에 전달
     command = " ".join(shlex.quote(arg) for arg in sys.argv[1:])
-    
+
     # 1. Request Backend
     print(f"{GREEN}[INFO]{RESET} Requesting backend for: {command}")
-    
+
     try:
         response = requests.post(
             f"{CONTROLLER_URL}/api/execute/",
@@ -91,18 +136,18 @@ def main():
         )
         response.raise_for_status()
         data = response.json()
-        
+
         if data.get("status") != "success":
             print(f"{RED}[ERROR]{RESET} {data.get('message')}")
             sys.exit(1)
-            
+
         backend_pod = data["backend_pod"]
         backend_ip = data["backend_ip"]
         tcp_port = data.get("tcp_port", TCP_PORT)
-        
+
         print(f"{GREEN}[INFO]{RESET} Backend allocated: {backend_pod} ({backend_ip})")
         print(f"{GREEN}[INFO]{RESET} Connecting to backend...")
-        
+
     except Exception as e:
         print(f"{RED}[ERROR]{RESET} Failed to allocate backend: {e}")
         sys.exit(1)
@@ -110,29 +155,35 @@ def main():
     # 2. Register Cleanup
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
-    
+
     # 3. Connect TCP
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.connect((backend_ip, int(tcp_port)))
-        
+
         # 4. Negotiate Settings
         rows, cols = get_terminal_size()
         settings = get_terminal_settings()
-        
+
         header = {
             "command": command,
+            "cwd": os.getcwd(),
             "rows": rows,
             "cols": cols,
             "term": os.getenv("TERM", "xterm-256color"),
             "settings": settings
         }
-        
+
         # Send Header (JSON line)
         sock.sendall(f"{json.dumps(header)}\n".encode('utf-8'))
-        
+
         # 5. Interactive Loop (Raw Mode)
         old_tty = termios.tcgetattr(sys.stdin)
+
+        # Marker 파일 생성 (소유권 복구 시 기준 시점)
+        marker_file = f"/tmp/run_marker_{os.getpid()}"
+        subprocess.run(["touch", marker_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
         try:
             tty.setraw(sys.stdin.fileno())
             stdin_fd = sys.stdin.fileno()
@@ -152,11 +203,21 @@ def main():
                     if not data:
                         break
                     sock.sendall(data)
-                    
+
         finally:
             termios.tcsetattr(sys.stdin, termios.TCSANOW, old_tty)
             print()
-            
+
+            # 실행 완료 후 소유권 복구
+            fix_ownership(marker_file)
+
+            # Marker 파일 정리
+            try:
+                if os.path.exists(marker_file):
+                    os.remove(marker_file)
+            except:
+                pass
+
     except Exception as e:
         try:
             termios.tcsetattr(sys.stdin, termios.TCSANOW, old_tty)
@@ -166,6 +227,7 @@ def main():
     finally:
         sock.close()
         cleanup()
+
 
 if __name__ == "__main__":
     main()
