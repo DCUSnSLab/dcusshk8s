@@ -78,7 +78,7 @@ def fix_ownership(marker_file):
             return
 
         # 기본 제외 목록
-        ignores = [".git", ".hg", ".svn", "node_modules", "venv", ".env", "__pycache__"]
+        ignores = [".git", ".hg", ".svn", "venv", ".env", "__pycache__"]
 
         # ~/.runignore에서 추가 제외 목록 로드
         runignore_path = os.path.join(home, ".runignore")
@@ -113,6 +113,10 @@ def fix_ownership(marker_file):
 
 def main():
     global backend_pod
+
+    if os.getenv("RUN_SESSION"):
+        print(f"{RED}[ERROR]{RESET} Cannot use 'run' inside a 'run' session")
+        sys.exit(1)
 
     if len(sys.argv) < 2:
         print(f"Usage: run <command>")
