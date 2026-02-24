@@ -1,7 +1,7 @@
 FROM ubuntu:20.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y sudo gcc vim python3 git gdb make htop openssh-server curl
+RUN apt-get update && apt-get install -y sudo gcc vim python3 git gdb make htop openssh-server curl pip
 
 # SSH 설정: PAM 비활성화, 공개키 인증 허용, Root 로그인 허용
 RUN mkdir -p /run/sshd && \

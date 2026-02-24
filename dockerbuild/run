@@ -12,6 +12,7 @@ import struct
 import fcntl
 import shlex
 import subprocess
+import time as _time
 
 
 # Configuration
@@ -100,7 +101,7 @@ def fix_ownership(marker_file):
             "-exec", "sudo", "chown", f"{os.getuid()}:{os.getgid()}", "{}", "+"
         ])
 
-        subprocess.run(
+        result = subprocess.run(
             find_cmd,
             check=False,
             stdout=subprocess.DEVNULL,
@@ -182,7 +183,9 @@ def main():
 
         # Marker 파일 생성 (소유권 복구 시 기준 시점)
         marker_file = f"/tmp/run_marker_{os.getpid()}"
-        subprocess.run(["touch", marker_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        open(marker_file, 'w').close()
+        t = _time.time() - 1
+        os.utime(marker_file, (t, t))
 
         try:
             tty.setraw(sys.stdin.fileno())
