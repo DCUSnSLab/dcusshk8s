@@ -58,8 +58,7 @@ class UserPod(LoggingConfigurable):
                 "initContainers": [
                     {
                         "name": "init-setup",
-                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:cleanup",
-                        # "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
+                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
                         "imagePullPolicy": "Always",
                         "command": ["/bin/bash","-c"],
                         "args": [
@@ -158,8 +157,7 @@ class UserPod(LoggingConfigurable):
                               "value": "{username}",
                            }
                         ],
-                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:cleanup",
-                        # "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
+                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
                         "imagePullPolicy": "Always",
                         "name": "shell",
                         "stdin": True,
