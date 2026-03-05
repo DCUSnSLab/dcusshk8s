@@ -501,6 +501,8 @@ class UserPod(LoggingConfigurable):
             # Future for ssh connection closing
             read_stdin = asyncio.ensure_future(ssh_process.stdin.read())
 
+            is_connection_lost = False
+
             # This loops is here to pass TerminalSizeChanged events through to ptyprocess
             # It needs to break when the ssh connection is gone or when the spawned process is gone.
             # See https://github.com/ronf/asyncssh/issues/134 for info on how this works
@@ -518,25 +520,30 @@ class UserPod(LoggingConfigurable):
                 except Exception as exc:
                     # SSH 터미널 강제 종료 시, at_eof()가 설정되기 전에 예외(ConnectionLost 등)가 발생할 수 있음
                     self.log.warning(f"SSH connection lost unexpectedly: {exc}")
+                    is_connection_lost = True
                     break
 
-            # [DEBUG] while 루프 탈출 후 상태 확인
-            self.log.info(f'[DEBUG] Loop exited: at_eof={ssh_process.stdin.at_eof()}, shell_done={shell_completed.done()}, session={session_id}')
+            # [DEBUG] while 루프 탈출 후 상태 확인 (출력 보장을 위해 warning 사용)
+            is_shell_done = shell_completed.done()
+            self.log.warning(f'[DEBUG] Loop exited: shell_done={is_shell_done}, lost={is_connection_lost}, session={session_id}')
 
             # SSH Client is gone, but process is still alive. Let's kill it!
-            # at_eof() 여부에 관계없이 shell이 끝나지 않았는데 루프를 빠져나왔다면 SSH가 끊긴 것
-            if not shell_completed.done():
+            # 비정상 종료이거나 shell 프로세스가 끝나지 않았다면 무조건 Cleanup 실행
+            if is_connection_lost or not is_shell_done:
+                self.log.warning(f'Terminating process for session {session_id}')
                 await loop.run_in_executor(ThreadPoolExecutor(1), lambda: process.terminate(force=True))
-                self.log.info(f'Terminated process for session {session_id}')
-
+                
                 # Pod 내부 해당 세션의 run 프로세스 cleanup
                 try:
                     await loop.run_in_executor(None, self._cleanup_session, session_id)
-                    self.log.info(f'Session cleanup completed: {session_id}')
+                    self.log.warning(f'Session cleanup completed: {session_id}')
                 except Exception as e:
                     self.log.warning(f'Session cleanup failed: {e}')
-
-            ssh_process.exit(shell_completed.result())
+                
+                # Force exit code 255 for disconnected sessions
+                ssh_process.exit(255)
+            else:
+                ssh_process.exit(shell_completed.result())
         else:
             process = await asyncio.create_subprocess_exec(
                 *kubectl_command,

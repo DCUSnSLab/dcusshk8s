@@ -87,7 +87,6 @@ class KubeSSH(Application):
             username = '-'.join(username[1:])
         else:
             username = '-'.join(username)
-        print(username) 
         pod = UserPod(parent=self, username=username, namespace=self.default_namespace)
 
 
@@ -142,13 +141,12 @@ class KubeSSH(Application):
             encoding=None,
             agent_forwarding=False, # The cause of so much pain! Let's not allow this by default
             keepalive_interval=30, # FIXME: Make this configurable
-            keepalive_count_max=3 # 창 닫힘 등의 Dead 연결을 빠르게 감지 (30초 x 3 = 90초 내 연결 끊음)
+            keepalive_count_max=10 # 창 닫힘 등의 Dead 연결을 빠르게 감지 (30초 x 10 = 300초 = 5분 내 연결 끊음)
         )
 
 app = KubeSSH()
 
 def main():
-    print('hello world')
     loop = asyncio.get_event_loop()
 
     app.initialize()
