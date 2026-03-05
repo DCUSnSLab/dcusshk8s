@@ -6,6 +6,7 @@ import time
 import argparse
 import os
 import sys
+import uuid
 from kubernetes import client as k
 import kubernetes.config
 import escapism
@@ -57,9 +58,9 @@ class UserPod(LoggingConfigurable):
                 "initContainers": [
                     {
                         "name": "init-setup",
-                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:chroot",
-                        "imagePullPolicy": "Always",
+                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:cleanup",
                         # "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
+                        "imagePullPolicy": "Always",
                         "command": ["/bin/bash","-c"],
                         "args": [
                             """
@@ -157,9 +158,9 @@ class UserPod(LoggingConfigurable):
                               "value": "{username}",
                            }
                         ],
-                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:chroot",
-                        "imagePullPolicy": "Always",
+                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:cleanup",
                         # "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
+                        "imagePullPolicy": "Always",
                         "name": "shell",
                         "stdin": True,
                         "tty": True,
@@ -445,7 +446,29 @@ class UserPod(LoggingConfigurable):
             )
         yield PodState.RUNNING
 
+    def _cleanup_session(self, session_id):
+        """
+        SSH 세션 종료 시 pod 내부의 해당 세션 run 프로세스를 SIGHUP으로 종료.
+
+        KUBESSH_SESSION_ID 환경변수로 세션을 식별하고,
+        cmdline에 "run"이 포함된 프로세스만 대상으로 한다.
+
+        향후 확장 시 이 메서드의 kill 대상 조건을 변경하거나,
+        kubectl delete pod 등으로 교체 가능.
+        """
+        kill_cmd = [
+            'kubectl', '--namespace', self.namespace,
+            'exec', '-c', 'shell', self.pod_name, '--',
+            'sh', '-c',
+            'for p in $(ls /proc 2>/dev/null | grep "^[0-9]"); do '
+            f'grep -qz "KUBESSH_SESSION_ID={session_id}" /proc/$p/environ 2>/dev/null && '
+            'grep -qz "/usr/local/bin/run" /proc/$p/cmdline 2>/dev/null && '
+            'kill -HUP $p 2>/dev/null; done'
+        ]
+        subprocess.run(kill_cmd, timeout=5, capture_output=True)
+
     async def execute(self, ssh_process):
+        session_id = uuid.uuid4().hex[:12]
         command = shlex.split(ssh_process.command) if ssh_process.command else ["/bin/bash", "-l"]
         tty_args = ['--tty'] if ssh_process.get_terminal_type() else []
         kubectl_command = [
@@ -456,7 +479,8 @@ class UserPod(LoggingConfigurable):
             '--stdin'
             ] + tty_args + [
             self.pod_name,
-            '--'
+            '--',
+            'env', f'KUBESSH_SESSION_ID={session_id}'
         ] + command
 
         # FIXME: Is this async friendly?
@@ -496,6 +520,13 @@ class UserPod(LoggingConfigurable):
             if ssh_process.stdin.at_eof() and not shell_completed.done():
                 await loop.run_in_executor(ThreadPoolExecutor(1), lambda: process.terminate(force=True))
                 self.log.info('Terminated process')
+
+                # Pod 내부 해당 세션의 run 프로세스 cleanup
+                try:
+                    await loop.run_in_executor(None, self._cleanup_session, session_id)
+                    self.log.info(f'Session cleanup completed: {session_id}')
+                except Exception as e:
+                    self.log.warning(f'Session cleanup failed: {e}')
 
             ssh_process.exit(shell_completed.result())
         else:

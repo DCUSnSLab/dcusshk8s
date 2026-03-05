@@ -160,6 +160,7 @@ def main():
     # 2. Register Cleanup
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
+    signal.signal(signal.SIGHUP, cleanup)
 
     # 3. Connect TCP
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
