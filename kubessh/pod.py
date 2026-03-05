@@ -515,11 +515,19 @@ class UserPod(LoggingConfigurable):
                         await future
                 except asyncssh.misc.TerminalSizeChanged as exc:
                     process.setwinsize(exc.height, exc.width)
+                except Exception as exc:
+                    # SSH 터미널 강제 종료 시, at_eof()가 설정되기 전에 예외(ConnectionLost 등)가 발생할 수 있음
+                    self.log.warning(f"SSH connection lost unexpectedly: {exc}")
+                    break
+
+            # [DEBUG] while 루프 탈출 후 상태 확인
+            self.log.info(f'[DEBUG] Loop exited: at_eof={ssh_process.stdin.at_eof()}, shell_done={shell_completed.done()}, session={session_id}')
 
             # SSH Client is gone, but process is still alive. Let's kill it!
-            if ssh_process.stdin.at_eof() and not shell_completed.done():
+            # at_eof() 여부에 관계없이 shell이 끝나지 않았는데 루프를 빠져나왔다면 SSH가 끊긴 것
+            if not shell_completed.done():
                 await loop.run_in_executor(ThreadPoolExecutor(1), lambda: process.terminate(force=True))
-                self.log.info('Terminated process')
+                self.log.info(f'Terminated process for session {session_id}')
 
                 # Pod 내부 해당 세션의 run 프로세스 cleanup
                 try:

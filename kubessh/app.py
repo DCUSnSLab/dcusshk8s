@@ -141,7 +141,8 @@ class KubeSSH(Application):
             server_host_keys=[self.ssh_host_key],
             encoding=None,
             agent_forwarding=False, # The cause of so much pain! Let's not allow this by default
-            keepalive_interval=30 # FIXME: Make this configurable
+            keepalive_interval=30, # FIXME: Make this configurable
+            keepalive_count_max=3 # 창 닫힘 등의 Dead 연결을 빠르게 감지 (30초 x 3 = 90초 내 연결 끊음)
         )
 
 app = KubeSSH()
