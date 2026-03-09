@@ -527,19 +527,20 @@ class UserPod(LoggingConfigurable):
             is_shell_done = shell_completed.done()
             self.log.warning(f'[DEBUG] Loop exited: shell_done={is_shell_done}, lost={is_connection_lost}, session={session_id}')
 
-            # SSH Client is gone, but process is still alive. Let's kill it!
-            # 비정상 종료이거나 shell 프로세스가 끝나지 않았다면 무조건 Cleanup 실행
-            if is_connection_lost or not is_shell_done:
+            # 터미널 창을 꺼서(EOF) kubectl exec만 종료(is_shell_done=True)되었더라도
+            # Pod 내부에는 run 프로세스가 남아있을 수 있으므로 무조건 Cleanup을 실행
+            if not is_shell_done:
                 self.log.warning(f'Terminating process for session {session_id}')
                 await loop.run_in_executor(ThreadPoolExecutor(1), lambda: process.terminate(force=True))
                 
-                # Pod 내부 해당 세션의 run 프로세스 cleanup
-                try:
-                    await loop.run_in_executor(None, self._cleanup_session, session_id)
-                    self.log.warning(f'Session cleanup completed: {session_id}')
-                except Exception as e:
-                    self.log.warning(f'Session cleanup failed: {e}')
-                
+            # Pod 내부 해당 세션의 run 프로세스 cleanup 무조건 실행
+            try:
+                await loop.run_in_executor(None, self._cleanup_session, session_id)
+                self.log.warning(f'Session cleanup completed: {session_id}')
+            except Exception as e:
+                self.log.warning(f'Session cleanup failed: {e}')
+            
+            if is_connection_lost or not is_shell_done:
                 # Force exit code 255 for disconnected sessions
                 ssh_process.exit(255)
             else:
