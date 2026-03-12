@@ -446,15 +446,10 @@ class UserPod(LoggingConfigurable):
             )
         yield PodState.RUNNING
 
-    def _cleanup_session(self, session_id):
+    def _cleanup_background_processes(self, session_id):
         """
-        SSH 세션 종료 시 pod 내부의 해당 세션 run 프로세스를 SIGHUP으로 종료.
-
-        KUBESSH_SESSION_ID 환경변수로 세션을 식별하고,
-        cmdline에 "run"이 포함된 프로세스만 대상으로 한다.
-
-        향후 확장 시 이 메서드의 kill 대상 조건을 변경하거나,
-        kubectl delete pod 등으로 교체 가능.
+        SSH 세션 종료 시 KUBESSH_SESSION_ID가 일치하는 단발성 및 백그라운드(nohup, &) 
+        프로세스를 모두 찾아내서 강제 종료(kill -9) 합니다.
         """
         kill_cmd = [
             'kubectl', '--namespace', self.namespace,
@@ -462,8 +457,7 @@ class UserPod(LoggingConfigurable):
             'sh', '-c',
             'for p in $(ls /proc 2>/dev/null | grep "^[0-9]"); do '
             f'grep -qz "KUBESSH_SESSION_ID={session_id}" /proc/$p/environ 2>/dev/null && '
-            'grep -qz "/usr/local/bin/run" /proc/$p/cmdline 2>/dev/null && '
-            'kill -HUP $p 2>/dev/null; done'
+            'kill -9 $p 2>/dev/null; done'
         ]
         subprocess.run(kill_cmd, timeout=5, capture_output=True)
 
@@ -497,7 +491,8 @@ class UserPod(LoggingConfigurable):
             # to help reason about interaction between asyncio and threads. A global threadpool
             # is fine when using it as a queue (when doing HTTP requests, for example), but not
             # here since we could end up deadlocking easily.
-            shell_completed = loop.run_in_executor(ThreadPoolExecutor(1), process.wait)
+            executor = ThreadPoolExecutor(1)
+            shell_completed = loop.run_in_executor(executor, process.wait)
             # Future for ssh connection closing
             read_stdin = asyncio.ensure_future(ssh_process.stdin.read())
 
@@ -527,24 +522,58 @@ class UserPod(LoggingConfigurable):
             is_shell_done = shell_completed.done()
             self.log.warning(f'[DEBUG] Loop exited: shell_done={is_shell_done}, lost={is_connection_lost}, session={session_id}')
 
-            # 터미널 창을 꺼서(EOF) kubectl exec만 종료(is_shell_done=True)되었더라도
-            # Pod 내부에는 run 프로세스가 남아있을 수 있으므로 무조건 Cleanup을 실행
-            if not is_shell_done:
-                self.log.warning(f'Terminating process for session {session_id}')
-                await loop.run_in_executor(ThreadPoolExecutor(1), lambda: process.terminate(force=True))
-                
-            # Pod 내부 해당 세션의 run 프로세스 cleanup 무조건 실행
+            # SSH Client is gone, but process is still alive. Graceful 3-stage shutdown.
+            if (ssh_process.stdin.at_eof() or is_connection_lost) and not shell_completed.done():
+                # Stage 1: Send EOF (Ctrl+D) to the pod's shell via PTY
+                try:
+                    process.write(b'\x04')
+                    self.log.info('Graceful shutdown stage 1: sent EOF (\\x04) to PTY')
+                except Exception:
+                    self.log.warning('Graceful shutdown stage 1: failed to send EOF')
+
+                try:
+                    await asyncio.wait_for(asyncio.shield(shell_completed), timeout=2)
+                    self.log.info('Process exited after EOF (stage 1)')
+                except asyncio.TimeoutError:
+                    pass
+
+                if not shell_completed.done():
+                    # Stage 2: SIGTERM - give kubectl exec a chance to close cleanly
+                    try:
+                        await loop.run_in_executor(executor, lambda: process.terminate(force=False))
+                        self.log.info('Graceful shutdown stage 2: sent SIGTERM')
+                    except Exception:
+                        self.log.warning('Graceful shutdown stage 2: failed to send SIGTERM')
+
+                    try:
+                        await asyncio.wait_for(asyncio.shield(shell_completed), timeout=5)
+                        self.log.info('Process exited after SIGTERM (stage 2)')
+                    except asyncio.TimeoutError:
+                        pass
+
+                if not shell_completed.done():
+                    # Stage 3: SIGKILL - force kill as last resort
+                    try:
+                        await loop.run_in_executor(executor, lambda: process.terminate(force=True))
+                        self.log.info('Graceful shutdown stage 3: sent SIGKILL')
+                    except Exception:
+                        self.log.warning('Graceful shutdown stage 3: failed to send SIGKILL')
+
+            # Stage 4: Universal Cleanup
+            # 3단계 패치 이후에도 nohup 등으로 살아남은 백그라운드 자식 프로세스가 있다면
+            # 세션 ID를 추적하여 무조건 확인 사살(kill -9) 합니다.
             try:
-                await loop.run_in_executor(None, self._cleanup_session, session_id)
-                self.log.warning(f'Session cleanup completed: {session_id}')
+                await loop.run_in_executor(executor, self._cleanup_background_processes, session_id)
+                self.log.info(f'Universal background cleanup completed for session: {session_id}')
             except Exception as e:
-                self.log.warning(f'Session cleanup failed: {e}')
+                self.log.warning(f'Universal background cleanup failed: {e}')
+            finally:
+                executor.shutdown(wait=False)
             
-            if is_connection_lost or not is_shell_done:
-                # Force exit code 255 for disconnected sessions
-                ssh_process.exit(255)
-            else:
+            if shell_completed.done():
                 ssh_process.exit(shell_completed.result())
+            else:
+                ssh_process.exit(255)
         else:
             process = await asyncio.create_subprocess_exec(
                 *kubectl_command,
@@ -552,4 +581,86 @@ class UserPod(LoggingConfigurable):
             )
             await ssh_process.redirect(stdin=process.stdin, stdout=process.stdout, stderr=process.stderr)
 
-            ssh_process.exit(await process.wait())
+            # Dual watch: monitor both process completion and SSH client disconnection
+            process_wait_task = asyncio.ensure_future(process.wait())
+
+            async def _watch_ssh_disconnect():
+                """Detect SSH client disconnection by reading stdin until EOF."""
+                try:
+                    while not ssh_process.stdin.at_eof():
+                        await ssh_process.stdin.read()
+                except Exception:
+                    pass
+
+            ssh_watch_task = asyncio.ensure_future(_watch_ssh_disconnect())
+
+            done, pending = await asyncio.wait(
+                [process_wait_task, ssh_watch_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+
+            if process_wait_task.done():
+                # Normal completion: process finished first
+                ssh_watch_task.cancel()
+                
+                # Stage 4: Universal Cleanup even on normal completion
+                try:
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(None, self._cleanup_background_processes, session_id)
+                    self.log.info(f'Universal background cleanup completed for normal non-TTY session: {session_id}')
+                except Exception as e:
+                    self.log.warning(f'Universal background cleanup failed: {e}')
+                    
+                ssh_process.exit(process_wait_task.result())
+            else:
+                # SSH client disconnected: graceful 3-stage shutdown for non-TTY
+                self.log.info('Non-TTY: SSH client disconnected, starting graceful shutdown')
+
+                # Stage 1: Close stdin pipe (sends EOF to the process)
+                try:
+                    if process.stdin and not process.stdin.is_closing():
+                        process.stdin.close()
+                    self.log.info('Non-TTY graceful shutdown stage 1: closed stdin pipe')
+                except Exception:
+                    self.log.warning('Non-TTY graceful shutdown stage 1: failed to close stdin')
+
+                try:
+                    await asyncio.wait_for(asyncio.shield(process_wait_task), timeout=2)
+                    self.log.info('Non-TTY process exited after stdin close (stage 1)')
+                except asyncio.TimeoutError:
+                    pass
+
+                if not process_wait_task.done():
+                    # Stage 2: SIGTERM
+                    try:
+                        process.terminate()
+                        self.log.info('Non-TTY graceful shutdown stage 2: sent SIGTERM')
+                    except Exception:
+                        self.log.warning('Non-TTY graceful shutdown stage 2: failed to send SIGTERM')
+
+                    try:
+                        await asyncio.wait_for(asyncio.shield(process_wait_task), timeout=5)
+                        self.log.info('Non-TTY process exited after SIGTERM (stage 2)')
+                    except asyncio.TimeoutError:
+                        pass
+
+                if not process_wait_task.done():
+                    # Stage 3: SIGKILL
+                    try:
+                        process.kill()
+                        self.log.info('Non-TTY graceful shutdown stage 3: sent SIGKILL')
+                    except Exception:
+                        self.log.warning('Non-TTY graceful shutdown stage 3: failed to send SIGKILL')
+
+                # Stage 4: Universal Cleanup
+                try:
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(None, self._cleanup_background_processes, session_id)
+                    self.log.info(f'Universal background cleanup completed for non-TTY session: {session_id}')
+                except Exception as e:
+                    self.log.warning(f'Universal background cleanup failed: {e}')
+
+                if process_wait_task.done():
+                    ssh_process.exit(process_wait_task.result())
+                else:
+                    ssh_process.exit(255)
