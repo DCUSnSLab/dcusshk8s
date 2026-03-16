@@ -132,6 +132,7 @@ class KubeSSH(Application):
             self.log.info(f'Loaded host key from {self.host_key_path}')
 
     async def start(self):
+        KubeSFTPServer.namespace = self.default_namespace
         await asyncssh.listen(
             host='',
             port=self.port,
