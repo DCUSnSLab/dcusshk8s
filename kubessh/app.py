@@ -15,6 +15,7 @@ import asyncssh
 from kubessh.pod import UserPod, PodState
 from kubessh.authentication import Authenticator
 from kubessh.authentication.github import GitHubAuthenticator
+from kubessh.sftp import KubeSFTPServer
 
 
 class KubeSSH(Application):
@@ -137,6 +138,7 @@ class KubeSSH(Application):
             # Pass log through so we keep same logging infrastructure everywhere
             server_factory=partial(self.authenticator_class, parent=self, namespace=self.default_namespace, log=self.log),
             process_factory=self.handle_client,
+            sftp_factory=KubeSFTPServer,
             kex_algs=[alg.decode('ascii') for alg in asyncssh.kex.get_kex_algs()],
             server_host_keys=[self.ssh_host_key],
             encoding=None,
