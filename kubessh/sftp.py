@@ -21,8 +21,6 @@ import string
 
 logger = logging.getLogger('kubessh.sftp')
 
-# Default namespace where user pods are spawned
-POD_NAMESPACE = 'swlabpods-gc'
 
 
 def _make_pod_name(username):
@@ -48,6 +46,7 @@ class KubeSFTPFileHandle:
         self.is_append = is_append
         self.buffer = io.BytesIO()
         self.closed = False
+        self.pending_attrs = None  # Deferred attributes to apply on close
 
 
 class KubeSFTPServer(SFTPServer):
@@ -58,6 +57,9 @@ class KubeSFTPServer(SFTPServer):
     user's pod in the configured namespace.
     """
 
+    # Set by app.py before starting the server
+    namespace = None
+
     def __init__(self, chan):
         super().__init__(chan)
         
@@ -65,7 +67,7 @@ class KubeSFTPServer(SFTPServer):
         username = chan.get_extra_info('username')
         self._username = username
         self._pod_name = _make_pod_name(username)
-        self._namespace = POD_NAMESPACE
+        self._namespace = self.namespace
         
         logger.info(f'SFTP session started for user={username}, pod={self._pod_name}, namespace={self._namespace}')
 
@@ -193,6 +195,10 @@ class KubeSFTPServer(SFTPServer):
                 
                 logger.info(f'Written {len(data)} bytes to {file_obj.path} on pod {file_obj.pod_name}')
             
+            # Apply deferred attributes after file is written to pod
+            if file_obj.pending_attrs:
+                await self._apply_attrs(file_obj.path, file_obj.pending_attrs)
+            
             file_obj.closed = True
 
     async def read(self, file_obj, offset, size):
@@ -210,7 +216,7 @@ class KubeSFTPServer(SFTPServer):
         if isinstance(file_obj, KubeSFTPFileHandle):
             file_obj.buffer.seek(offset)
             file_obj.buffer.write(data)
-            return len(data)
+            return
         raise SFTPError(asyncssh.FX_FAILURE, 'Invalid file handle')
 
     # ─── File attribute methods ────────────────────────────────────────
@@ -272,7 +278,11 @@ class KubeSFTPServer(SFTPServer):
     async def fsetstat(self, file_obj, attrs):
         """Set file attributes on an open file handle (called by scp after upload)."""
         if isinstance(file_obj, KubeSFTPFileHandle):
-            await self._apply_attrs(file_obj.path, attrs)
+            if file_obj.is_write and not file_obj.closed:
+                # Defer attribute setting until close() when file is actually written to pod
+                file_obj.pending_attrs = attrs
+            else:
+                await self._apply_attrs(file_obj.path, attrs)
 
     async def _apply_attrs(self, path_str, attrs):
         """Apply file attributes to a path on the user's pod."""
