@@ -15,6 +15,7 @@ import asyncssh
 from kubessh.pod import UserPod, PodState
 from kubessh.authentication import Authenticator
 from kubessh.authentication.github import GitHubAuthenticator
+from kubessh.sftp import KubeSFTPServer
 
 
 class KubeSSH(Application):
