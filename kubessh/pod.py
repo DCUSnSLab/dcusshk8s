@@ -58,9 +58,7 @@ class UserPod(LoggingConfigurable):
                 "initContainers": [
                     {
                         "name": "init-setup",
-                        "image": "harbor.cu.ac.kr/k8s_dynamic_allocator/frontend:latest",
-                        # "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
-                        "imagePullPolicy": "Always",
+                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
                         "command": ["/bin/bash","-c"],
                         "args": [
                             """
@@ -123,20 +121,6 @@ class UserPod(LoggingConfigurable):
                             if [ ! -f /home/dcuuser/.vimrc ]; then
                                 echo -e 'if has ("syntax")\\n    syntax on\\nendif\\n\\nset autoindent\\nset cindent\\nset nu\\n\\nset smartindent\\nset tabstop=4\\nset shiftwidth=4' > /home/dcuuser/.vimrc;
                             fi;
-                            # SSH 설정 (PVC의 /etc에 대해 런타임 수정)
-                            sudo sed -i 's/UsePAM yes/UsePAM no/g' /etc/ssh/sshd_config;
-                            sudo sed -i '/Subsystem sftp/d' /etc/ssh/sshd_config;
-                            echo "Subsystem sftp /usr/lib/openssh/sftp-server" | sudo tee -a /etc/ssh/sshd_config;
-                            echo "PubkeyAuthentication yes" | sudo tee -a /etc/ssh/sshd_config;
-                            echo "PermitRootLogin yes" | sudo tee -a /etc/ssh/sshd_config;
-                            # SSH 키 설정
-                            sudo mkdir -p /home/dcuuser/.ssh;
-                            sudo cp /etc/ssh-key-source/id_rsa.pub /home/dcuuser/.ssh/authorized_keys;
-                            sudo chown -R dcuuser:dcuuser /home/dcuuser/.ssh;
-                            sudo chmod 700 /home/dcuuser/.ssh;
-                            sudo chmod 600 /home/dcuuser/.ssh/authorized_keys;
-                            # sshd 시작
-                            sudo /usr/sbin/sshd;
                             while true; do sleep 10; done
                             """
                         ],
@@ -144,23 +128,9 @@ class UserPod(LoggingConfigurable):
                            {
                               "name": "PATH",
                               "value": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                           },
-                           {
-                              "name": "POD_NAME",
-                              "valueFrom": {
-                                  "fieldRef": {
-                                      "fieldPath": "metadata.name"
-                                  }
-                              }
-                           },
-                           {
-                              "name": "USER",
-                              "value": "{username}",
                            }
                         ],
-                        "image": "harbor.cu.ac.kr/k8s_dynamic_allocator/frontend:latest",
-                        # "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
-                        "imagePullPolicy": "Always",
+                        "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
                         "name": "shell",
                         "stdin": True,
                         "tty": True,
@@ -199,11 +169,6 @@ class UserPod(LoggingConfigurable):
                                 "name": "poddata",
                                 "mountPath": "/home",
                                 "subPath": "home"
-                            },
-                            {
-                                "name": "ssh-public-key",
-                                "mountPath": "/etc/ssh-key-source",
-                                "readOnly": True
                             }
                         ]
                     }
@@ -211,12 +176,6 @@ class UserPod(LoggingConfigurable):
                 "volumes": [
                     {
                         "name": "poddata",
-                    },
-                    {
-                        "name": "ssh-public-key",
-                        "configMap": {
-                            "name": "backend-public-key"
-                        }
                     }
                 ],
             },
@@ -247,8 +206,8 @@ class UserPod(LoggingConfigurable):
                                     "storage": "5Gi",
                             },
                     },
-                    #"storageClassName": "normal-r3",
-                    "storageClassName": "openebs-hostpath",
+                    "storageClassName": "normal-r3",
+                    #"storageClassName": "openebs-hostpath",
                 },
             },
             
