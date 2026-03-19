@@ -1,5 +1,5 @@
 from kubessh.authentication import Authenticator
-import async_timeout
+import asyncio
 import aiohttp
 import asyncssh
 import re
@@ -44,7 +44,7 @@ class GitLabAuthenticator(Authenticator):
             self.log.info(f"User {username} not in allowed_users, authentication denied")
             return True
         url = f'{self.instance_url}/{username}.keys'
-        async with aiohttp.ClientSession() as session, async_timeout.timeout(5):
+        async with aiohttp.ClientSession() as session, asyncio.timeout(5):
             async with session.get(url) as response:
                 keys = await response.text()
         if keys:

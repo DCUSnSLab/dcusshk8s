@@ -72,7 +72,7 @@ class BaseServer(asyncssh.SSHServer, LoggingConfigurable):
                 "Only localhost connections allowed"
             )
 
-        username = process.channel.get_extra_info('username').split('-')
+        username = self.conn.get_extra_info('username').split('-')
         if username and username[0] == 'dcucode':
             username = '-'.join(username[1:])
         else:
