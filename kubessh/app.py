@@ -88,7 +88,6 @@ class KubeSSH(Application):
             username = '-'.join(username[1:])
         else:
             username = '-'.join(username)
-        print(username) 
         pod = UserPod(parent=self, username=username, namespace=self.default_namespace)
 
 
