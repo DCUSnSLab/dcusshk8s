@@ -1,7 +1,10 @@
-kubernetes
-asyncssh
-ptyprocess
-escapism
-traitlets
-pycryptodome
-ruamel.yaml
+asyncssh>=2.14.2,<3.0
+aiohttp>=3.9.0,<4.0
+kubernetes>=28.1.0,<32.0
+simpervisor>=1.0.0,<2.0
+traitlets>=5.0,<6.0
+ptyprocess>=0.7.0
+escapism>=1.0.1
+pycryptodome>=3.19.0,<4.0
+ruamel.yaml>=0.18.0,<1.0
+requests>=2.31.0,<3.0
