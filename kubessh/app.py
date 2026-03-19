@@ -107,7 +107,9 @@ class KubeSSH(Application):
         """
         Fix logging so both asyncssh & traitlet logging works
         """
-        self.log.setLevel(logging.DEBUG if self.debug else logging.INFO)
+        level = logging.DEBUG if self.debug else logging.INFO
+        self.log_level = level
+        self.log.setLevel(level)
         self.log.propagate = True
         UserPod.log = self.log
 
