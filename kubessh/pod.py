@@ -531,11 +531,11 @@ class UserPod(LoggingConfigurable):
                     process.setwinsize(exc.height, exc.width)
                 except Exception as exc:
                     # at_eof() 설정 전에 ConnectionLost 등의 예외가 먼저 발생할 수 있음
-                    self.log.warning(f"SSH connection lost unexpectedly: {exc}")
+                    self.log.info(f"SSH connection disconnected: {exc}")
                     is_connection_lost = True
                     break
 
-            self.log.warning(f'[DEBUG] Loop exited: shell_done={shell_completed.done()}, lost={is_connection_lost}, session={session_id}')
+            self.log.info(f"Loop exited: user={self.username}, shell_done={shell_completed.done()}, lost={is_connection_lost}, session={session_id}")
 
             # SSH가 끊겼는데 프로세스가 아직 살아있는 경우에만 종료 시퀀스를 실행
             if (ssh_process.stdin.at_eof() or is_connection_lost) and not shell_completed.done():
