@@ -62,7 +62,7 @@ class DummyAuthenticator(Authenticator):
             if response.status_code == 200:
                 response_data = json.loads(response.text)
 
-                self.log.info(response_data['data'])
+                self.log.debug(response_data['data'])
     
                 if response_data['error'] == None:
                     return True
@@ -75,12 +75,12 @@ class DummyAuthenticator(Authenticator):
                 'password': encrypted_password
             }
             response = requests.post(url, json=data)
-            print("HTTP response status code :", response.status_code)
+            self.log.info(f"HTTP response status code : {response.status_code}")
 
             if response.status_code == 200:
                 response_data = json.loads(response.text)
 
-                self.log.info(response_data['data'])
+                self.log.debug(response_data['data'])
     
                 if response_data['error'] == None:
                     return True
