@@ -17,7 +17,9 @@ setuptools.setup(
         'traitlets',
         'escapism',
         'ruamel.yaml',
-        'simpervisor'
+        'simpervisor',
+        'requests',
+        'pycryptodome'
     ],
     entry_points = {
         'console_scripts': [

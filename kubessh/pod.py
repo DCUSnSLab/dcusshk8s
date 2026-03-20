@@ -301,7 +301,7 @@ class UserPod(LoggingConfigurable):
         self.kube_api_threadpool = ThreadPoolExecutor(1)
 
     def _run_in_executor(self, func, *args, **kwargs):
-        return asyncio.get_event_loop().run_in_executor(self.kube_api_threadpool, functools.partial(func, *args, **kwargs))
+        return asyncio.get_running_loop().run_in_executor(self.kube_api_threadpool, functools.partial(func, *args, **kwargs))
 
     def _make_labelselector(self, labels):
         return ','.join([f'{k}={v}' for k, v in labels.items()])
@@ -460,7 +460,7 @@ class UserPod(LoggingConfigurable):
             process = PtyProcess.spawn(argv=kubectl_command, dimensions=(ts[1], ts[0]))
             await ssh_process.redirect(process, process)
 
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
 
             # Future for spawned process dying
             # We explicitly create a threadpool of 1 threads for every run_in_executor call
@@ -490,11 +490,11 @@ class UserPod(LoggingConfigurable):
                     process.setwinsize(exc.height, exc.width)
                 except Exception as exc:
                     # at_eof() 설정 전에 ConnectionLost 등의 예외가 먼저 발생할 수 있음
-                    self.log.warning(f"SSH connection lost unexpectedly: {exc}")
+                    self.log.info(f"SSH connection disconnected: {exc}")
                     is_connection_lost = True
                     break
 
-            self.log.warning(f'[DEBUG] Loop exited: shell_done={shell_completed.done()}, lost={is_connection_lost}, session={session_id}')
+            self.log.info(f"Loop exited: user={self.username}, shell_done={shell_completed.done()}, lost={is_connection_lost}, session={session_id}")
 
             # SSH가 끊겼는데 프로세스가 아직 살아있는 경우에만 종료 시퀀스를 실행
             if (ssh_process.stdin.at_eof() or is_connection_lost) and not shell_completed.done():
@@ -577,7 +577,7 @@ class UserPod(LoggingConfigurable):
                 # 정상 종료: 명령어가 먼저 끝난 경우
                 ssh_watch_task.cancel()
                 try:
-                    loop = asyncio.get_event_loop()
+                    loop = asyncio.get_running_loop()
                     await loop.run_in_executor(None, self._cleanup_background_processes, session_id)
                     self.log.info(f'Non-TTY cleanup completed (normal exit) for session: {session_id}')
                 except Exception as e:
@@ -624,7 +624,7 @@ class UserPod(LoggingConfigurable):
 
                 # Stage 4: 환경변수(KUBESSH_SESSION_ID)로 잔여 백그라운드 프로세스 일괄 정리
                 try:
-                    loop = asyncio.get_event_loop()
+                    loop = asyncio.get_running_loop()
                     await loop.run_in_executor(None, self._cleanup_background_processes, session_id)
                     self.log.info(f'Non-TTY cleanup completed for session: {session_id}')
                 except Exception as e:

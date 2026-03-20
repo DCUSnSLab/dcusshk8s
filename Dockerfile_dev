@@ -1,4 +1,4 @@
-FROM python:3.6.8-alpine
+FROM python:3.11-alpine
 
 WORKDIR /dcusshk8s
 
@@ -14,8 +14,6 @@ RUN apk add openssh-keygen
 RUN pip install --upgrade pip
 
 RUN pip install --editable .
-
-RUN pip install pycryptodome
 
 RUN apk add vim
 

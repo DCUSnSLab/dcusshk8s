@@ -106,7 +106,9 @@ class KubeSSH(Application):
         """
         Fix logging so both asyncssh & traitlet logging works
         """
-        self.log.setLevel(logging.DEBUG if self.debug else logging.INFO)
+        level = logging.DEBUG if self.debug else logging.INFO
+        self.log_level = level
+        self.log.setLevel(level)
         self.log.propagate = True
         UserPod.log = self.log
 
@@ -137,7 +139,6 @@ class KubeSSH(Application):
             # Pass log through so we keep same logging infrastructure everywhere
             server_factory=partial(self.authenticator_class, parent=self, namespace=self.default_namespace, log=self.log),
             process_factory=self.handle_client,
-            kex_algs=[alg.decode('ascii') for alg in asyncssh.kex.get_kex_algs()],
             server_host_keys=[self.ssh_host_key],
             encoding=None,
             agent_forwarding=False, # The cause of so much pain! Let's not allow this by default
@@ -148,7 +149,8 @@ app = KubeSSH()
 
 def main():
     print('hello world')
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
     app.initialize()
     loop.run_until_complete(app.start())

@@ -1,5 +1,5 @@
 from kubessh.authentication import Authenticator
-import async_timeout
+import asyncio
 import aiohttp
 import asyncssh
 from traitlets import List
@@ -33,7 +33,7 @@ class GitHubAuthenticator(Authenticator):
             self.log.info(f"User {username} not in allowed_users, authentication denied")
             return True
         url = f'https://github.com/{username}.keys'
-        async with aiohttp.ClientSession() as session, async_timeout.timeout(5):
+        async with aiohttp.ClientSession() as session, asyncio.timeout(5):
             async with session.get(url) as response:
                 keys = await response.text()
         if keys:
