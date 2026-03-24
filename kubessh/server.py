@@ -47,10 +47,22 @@ class BaseServer(asyncssh.SSHServer, LoggingConfigurable):
         """
         Terminate any running port-forward process when done
         """
-        for proc in self.forwarding_processes.values():
-            # FIXME: This isn't great, since it doesn't retrieve exceptions
-            # Maybe needs to be a thread?
-            asyncio.create_task(proc.terminate())
+        async def _cleanup_forwards(procs):
+            tasks = [asyncio.ensure_future(proc.terminate()) for proc in procs]
+            if tasks:
+                try:
+                    await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=5.0)
+                except asyncio.TimeoutError:
+                    pass
+                except Exception:
+                    pass
+
+        # 스냅샷 복사 후 딕셔너리를 비워서 안전하게 정리 태스크에 던집니다.
+        procs = list(self.forwarding_processes.values())
+        self.forwarding_processes.clear()
+        
+        if procs:
+            asyncio.ensure_future(_cleanup_forwards(procs))
 
     def connection_requested(self, dest_host, dest_port, orig_host, orig_port):
         # Only allow localhost connections
@@ -60,7 +72,7 @@ class BaseServer(asyncssh.SSHServer, LoggingConfigurable):
                 "Only localhost connections allowed"
             )
 
-        username = process.channel.get_extra_info('username').split('-')
+        username = self.conn.get_extra_info('username').split('-')
         if username and username[0] == 'dcucode':
             username = '-'.join(username[1:])
         else:
