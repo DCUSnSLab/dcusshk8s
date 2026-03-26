@@ -27,7 +27,7 @@ spec:
           kubernetes.io/metadata.name: swlabpods
       podSelector:
         matchLabels:
-          app: backend
+          app: backend-pool
     ports:
     - protocol: TCP
       port: 8081
