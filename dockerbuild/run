@@ -1,53 +1,380 @@
 #!/usr/bin/env python3
-import sys
-import os
-import socket
-import select
-import termios
-import tty
-import json
-import requests
-import signal
-import struct
 import fcntl
+import json
+import os
+import select
 import shlex
+import signal
+import socket
+import struct
 import subprocess
+import sys
+import termios
 import time as _time
+import tty
+from urllib.parse import urljoin
+
+import requests
 
 
-# Configuration
-CONTROLLER_URL = "http://controller-service:9001"
+CONTROLLER_URL = os.getenv("CONTROLLER_URL", "http://controller-service:9001")
 FRONTEND_POD = os.getenv("HOSTNAME", "unknown")
-TCP_PORT = 8081
+DEFAULT_TCP_PORT = 8081
 
-# Colors
-GREEN = '\033[0;32m'
-RED = '\033[0;31m'
-YELLOW = '\033[1;33m'
-RESET = '\033[0m'
+GREEN = "\033[0;32m"
+RED = "\033[0;31m"
+YELLOW = "\033[1;33m"
+RESET = "\033[0m"
+
+
+def _env_float(name, default):
+    try:
+        return float(os.getenv(name, default))
+    except Exception:
+        return float(default)
+
+
+EXECUTE_REQUEST_TIMEOUT_SECONDS = _env_float("RUN_EXECUTE_REQUEST_TIMEOUT_SECONDS", "10")
+TICKET_POLL_REQUEST_TIMEOUT_SECONDS = _env_float("RUN_TICKET_POLL_REQUEST_TIMEOUT_SECONDS", "10")
+TICKET_WAIT_TIMEOUT_SECONDS = _env_float("RUN_TICKET_WAIT_TIMEOUT_SECONDS", "1800")
+TICKET_POLL_INTERVAL_SECONDS = _env_float("RUN_TICKET_POLL_INTERVAL_SECONDS", "1.0")
+CANCEL_REQUEST_TIMEOUT_SECONDS = _env_float("RUN_CANCEL_REQUEST_TIMEOUT_SECONDS", "5")
+RELEASE_REQUEST_TIMEOUT_SECONDS = _env_float("RUN_RELEASE_REQUEST_TIMEOUT_SECONDS", "2")
+
 
 backend_pod = None
+session_state = {
+    "status": None,
+    "ticket_id": None,
+    "ticket_url": None,
+    "cancel_url": None,
+    "release_url": None,
+    "backend_pod": None,
+    "backend_ip": None,
+    "tcp_port": DEFAULT_TCP_PORT,
+    "frontend_pod": FRONTEND_POD,
+    "command": None,
+}
+_cleanup_completed = False
+_cleanup_failed = False
+_execute_request_in_flight = False
+_controller_response_pending = False
+_deferred_signal_exit_code = None
 
 
-def cleanup(signum=None, frame=None):
-    if backend_pod:
-        print(f"\n{YELLOW}[INFO]{RESET} Releasing backend...")
+def _set_session_state(**kwargs):
+    session_state.update(kwargs)
+
+
+def _absolute_url(path, default_path):
+    target = path or default_path
+    return urljoin(CONTROLLER_URL.rstrip("/") + "/", str(target).lstrip("/"))
+
+
+def _safe_json(response):
+    try:
+        data = response.json()
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _normalize_status(data, response=None):
+    raw_status = ""
+    for key in ("status", "phase", "state", "ticket_status"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            raw_status = value.strip().lower()
+            break
+
+    ticket = data.get("ticket")
+    if isinstance(ticket, dict):
+        ticket_status = ticket.get("status")
+        if isinstance(ticket_status, str) and ticket_status.strip():
+            normalized_ticket_status = ticket_status.strip().lower()
+            if raw_status in {"", "success", "ok"}:
+                raw_status = normalized_ticket_status
+
+    if not raw_status and response is not None:
+        if response.status_code == 202:
+            raw_status = "queued"
+        elif response.status_code == 404:
+            raw_status = "failed"
+        elif response.status_code == 410:
+            raw_status = "cancelled"
+
+    if raw_status in {"ok", "success", "assigned"}:
+        if data.get("backend_pod") or data.get("backend_ip") or data.get("backend"):
+            return "assigned"
+        return "success"
+    if raw_status in {"canceled"}:
+        return "cancelled"
+    return raw_status
+
+
+def _get_ticket_id(data):
+    ticket_id = data.get("ticket_id")
+    if ticket_id is not None:
+        return str(ticket_id)
+
+    ticket = data.get("ticket")
+    if isinstance(ticket, dict) and ticket.get("ticket_id") is not None:
+        return str(ticket.get("ticket_id"))
+
+    return None
+
+
+def _get_backend_info(data):
+    backend = data.get("backend")
+    if not isinstance(backend, dict):
+        backend = {}
+
+    ticket = data.get("ticket")
+    if not isinstance(ticket, dict):
+        ticket = {}
+
+    backend_pod_value = (
+        data.get("backend_pod")
+        or backend.get("backend_pod")
+        or backend.get("pod")
+        or ticket.get("backend_pod")
+    )
+    backend_ip_value = (
+        data.get("backend_ip")
+        or backend.get("backend_ip")
+        or backend.get("ip")
+        or ticket.get("backend_ip")
+    )
+    tcp_port_value = data.get("tcp_port") or backend.get("tcp_port") or backend.get("port") or DEFAULT_TCP_PORT
+    return backend_pod_value, backend_ip_value, tcp_port_value
+
+
+def _frontend_ip_from_env():
+    for key in ("FRONTEND_IP", "POD_IP", "MY_POD_IP"):
+        value = os.getenv(key, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _extract_ticket_urls(data, ticket_id):
+    ticket_url = data.get("poll_url") or data.get("ticket_url")
+    cancel_url = data.get("cancel_url")
+    release_url = data.get("release_url")
+
+    if not ticket_url and ticket_id:
+        ticket_url = f"/api/ticket/{ticket_id}/"
+    if not cancel_url and ticket_id:
+        cancel_url = f"/api/ticket/{ticket_id}/cancel/"
+    if not release_url:
+        release_url = "/api/pool/release/"
+
+    ticket_default = f"/api/ticket/{ticket_id}/" if ticket_id else "/api/ticket/"
+    cancel_default = f"/api/ticket/{ticket_id}/cancel/" if ticket_id else "/api/ticket/"
+    return (
+        _absolute_url(ticket_url, ticket_default),
+        _absolute_url(cancel_url, cancel_default),
+        _absolute_url(release_url, "/api/pool/release/"),
+    )
+
+
+def _request_json(method, url, payload=None, timeout=10):
+    kwargs = {"timeout": timeout}
+    if payload is not None:
+        kwargs["json"] = payload
+
+    if method == "GET":
+        response = requests.get(url, **kwargs)
+    else:
+        response = requests.post(url, **kwargs)
+    return response, _safe_json(response)
+
+
+def _best_effort_post(url_candidates, payload, timeout, label):
+    last_error = None
+    for attempt in range(3):
+        for url in url_candidates:
+            if not url:
+                continue
+            try:
+                response = requests.post(url, json=payload, timeout=timeout)
+                if response.status_code < 400:
+                    return True
+                last_error = RuntimeError(f"{label} failed with {response.status_code}: {response.text}")
+            except Exception as exc:
+                last_error = exc
+        if attempt < 2:
+            _time.sleep(0.5)
+
+    if last_error:
+        print(f"{YELLOW}[WARN]{RESET} {label} request failed: {last_error}")
+    return False
+
+
+def _cancel_ticket(reason):
+    ticket_id = session_state.get("ticket_id")
+    if not ticket_id:
+        return False
+
+    status = (session_state.get("status") or "").lower()
+    if status in {"assigned", "failed", "cancelled"}:
+        return False
+
+    ticket_url = session_state.get("ticket_url") or _absolute_url(None, f"/api/ticket/{ticket_id}/")
+    cancel_url = session_state.get("cancel_url") or _absolute_url(None, f"/api/ticket/{ticket_id}/cancel/")
+    payload = {
+        "ticket_id": ticket_id,
+        "frontend_pod": session_state.get("frontend_pod"),
+        "reason": reason,
+        "command": session_state.get("command"),
+    }
+    return _best_effort_post(
+        [cancel_url, f"{ticket_url.rstrip('/')}/cancel/"],
+        payload,
+        CANCEL_REQUEST_TIMEOUT_SECONDS,
+        "cancel ticket",
+    )
+
+
+def _release_backend(reason):
+    backend = session_state.get("backend_pod") or backend_pod
+    if not backend:
+        return False
+
+    release_url = session_state.get("release_url") or _absolute_url(None, "/api/pool/release/")
+    payload = {
+        "backend_pod": backend,
+        "ticket_id": session_state.get("ticket_id"),
+        "frontend_pod": session_state.get("frontend_pod"),
+        "reason": reason,
+    }
+    return _best_effort_post([release_url], payload, RELEASE_REQUEST_TIMEOUT_SECONDS, "release backend")
+
+
+def _handle_cleanup(reason):
+    status = (session_state.get("status") or "").lower()
+    if status in {"failed", "cancelled"}:
+        return True
+
+    cleanup_ok = True
+    if status == "assigned" or session_state.get("backend_pod") or backend_pod:
+        cleanup_ok = _release_backend(reason) and cleanup_ok
+    elif session_state.get("ticket_id"):
+        cleanup_ok = _cancel_ticket(reason) and cleanup_ok
+    return cleanup_ok
+
+
+def _wait_for_assignment(ticket_url):
+    deadline = _time.monotonic() + TICKET_WAIT_TIMEOUT_SECONDS
+    last_error = None
+
+    while _time.monotonic() < deadline:
         try:
-            requests.post(
-                f"{CONTROLLER_URL}/api/pool/release/",
-                json={"backend_pod": backend_pod},
-                timeout=2
-            )
-        except:
-            pass
-    sys.exit(0)
+            response, data = _request_json("GET", ticket_url, timeout=TICKET_POLL_REQUEST_TIMEOUT_SECONDS)
+            status = _normalize_status(data, response)
+
+            if status in {"assigned", "success"}:
+                backend_pod_value, backend_ip_value, tcp_port_value = _get_backend_info(data)
+                if backend_pod_value and backend_ip_value:
+                    _set_session_state(
+                        status="assigned",
+                        backend_pod=backend_pod_value,
+                        backend_ip=backend_ip_value,
+                        tcp_port=tcp_port_value,
+                    )
+                    return "assigned", data
+
+            if status in {"failed", "cancelled"}:
+                _set_session_state(status=status)
+                return status, data
+
+            if status in {"queued", "allocating"}:
+                _set_session_state(status=status)
+                retry_after_ms = data.get("retry_after_ms") or data.get("retry_after")
+                sleep_seconds = TICKET_POLL_INTERVAL_SECONDS
+                try:
+                    if retry_after_ms is not None:
+                        retry_after_seconds = float(retry_after_ms) / 1000.0
+                        if retry_after_seconds > 0:
+                            sleep_seconds = retry_after_seconds
+                except Exception:
+                    pass
+                _time.sleep(max(0.2, sleep_seconds))
+                continue
+
+            backend_pod_value, backend_ip_value, tcp_port_value = _get_backend_info(data)
+            if backend_pod_value and backend_ip_value:
+                _set_session_state(
+                    status="assigned",
+                    backend_pod=backend_pod_value,
+                    backend_ip=backend_ip_value,
+                    tcp_port=tcp_port_value,
+                )
+                return "assigned", data
+
+            last_error = RuntimeError(f"Unexpected ticket response: {data}")
+        except Exception as exc:
+            last_error = exc
+            print(f"{YELLOW}[WARN]{RESET} Waiting for ticket failed: {exc}")
+            _time.sleep(TICKET_POLL_INTERVAL_SECONDS)
+
+    return "timeout", {"error": last_error}
+
+
+def cleanup(signum=None, frame=None, exit_code=None):
+    global _cleanup_completed, _cleanup_failed, _deferred_signal_exit_code
+
+    if signum is not None and exit_code is None:
+        exit_code = 128 + int(signum)
+
+    if (
+        signum is not None
+        and (_execute_request_in_flight or _controller_response_pending)
+        and not session_state.get("ticket_id")
+        and not session_state.get("backend_pod")
+        and not backend_pod
+    ):
+        _deferred_signal_exit_code = exit_code
+        print(f"\n{YELLOW}[INFO]{RESET} Interrupt requested. Waiting for controller response before cleanup...")
+        return False
+
+    if _cleanup_completed:
+        if exit_code is not None:
+            raise SystemExit(exit_code)
+        return not _cleanup_failed
+    _cleanup_completed = True
+
+    cleanup_ok = True
+    if session_state.get("ticket_id"):
+        current_status = (session_state.get("status") or "").lower()
+        if current_status == "assigned" or session_state.get("backend_pod") or backend_pod:
+            print(f"\n{YELLOW}[INFO]{RESET} Releasing backend...")
+        else:
+            print(f"\n{YELLOW}[INFO]{RESET} Cancelling queued ticket...")
+        cleanup_ok = _handle_cleanup("signal" if signum is not None else "cleanup")
+
+    _cleanup_failed = not cleanup_ok
+
+    if exit_code is not None:
+        final_exit_code = exit_code if cleanup_ok else 1
+        raise SystemExit(final_exit_code)
+    return cleanup_ok
+
+
+def _register_signal_handlers():
+    signal.signal(signal.SIGINT, cleanup)
+    signal.signal(signal.SIGTERM, cleanup)
+    signal.signal(signal.SIGHUP, cleanup)
 
 
 def get_terminal_size():
     try:
-        rows, cols = struct.unpack('hh', fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, '1234'))
+        rows, cols = struct.unpack(
+            "hh",
+            fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, struct.pack("hhhh", 0, 0, 0, 0)),
+        )
         return rows, cols
-    except:
+    except Exception:
         return 24, 80
 
 
@@ -55,64 +382,55 @@ def get_terminal_settings():
     try:
         attrs = termios.tcgetattr(sys.stdin.fileno())
         verase = attrs[6][termios.VERASE]
-        # verase는 bytes 또는 int일 수 있음
         if isinstance(verase, bytes) and len(verase) == 1:
             verase_val = ord(verase)
         elif isinstance(verase, int):
             verase_val = verase
         else:
-            verase_val = 127  # DEL 기본값
-        return {
-            "verase": verase_val
-        }
-    except:
+            verase_val = 127
+        return {"verase": verase_val}
+    except Exception:
         return {"verase": 127}
 
 
 def fix_ownership(marker_file):
-    """Backend가 생성/수정한 파일의 소유권을 현재 사용자로 복구"""
     try:
         home = os.path.expanduser("~")
-
-        if not os.path.exists(home):
+        if not os.path.exists(home) or not os.path.exists(marker_file):
             return
 
-        # 기본 제외 목록
         ignores = [".git", ".hg", ".svn", "venv", ".env", "__pycache__"]
-
-        # ~/.runignore에서 추가 제외 목록 로드
         runignore_path = os.path.join(home, ".runignore")
         if os.path.exists(runignore_path):
             try:
-                with open(runignore_path, "r") as f:
-                    for line in f:
+                with open(runignore_path, "r", encoding="utf-8") as handle:
+                    for line in handle:
                         line = line.strip()
                         if line and not line.startswith("#"):
                             ignores.append(line)
-            except:
+            except Exception:
                 pass
 
-        # find 명령어 구성: Marker보다 새로운 파일만 선별하여 소유권 변경
         find_cmd = ["find", home]
         for ignore in ignores:
             find_cmd.extend(["-name", ignore, "-prune", "-o"])
         find_cmd.extend([
             "-newer", marker_file,
-            "-exec", "sudo", "chown", f"{os.getuid()}:{os.getgid()}", "{}", "+"
+            "-exec", "sudo", "chown", f"{os.getuid()}:{os.getgid()}", "{}", "+",
         ])
 
-        result = subprocess.run(
+        subprocess.run(
             find_cmd,
             check=False,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.DEVNULL,
         )
-    except:
+    except Exception:
         pass
 
 
 def main():
-    global backend_pod
+    global backend_pod, _controller_response_pending, _execute_request_in_flight
 
     if os.getenv("RUN_SESSION"):
         print(f"{RED}[ERROR]{RESET} Cannot use 'run' inside a 'run' session")
@@ -122,75 +440,126 @@ def main():
         print(f"Usage: run <command>")
         sys.exit(1)
 
-    # 단순 join 대신 shlex.quote를 사용하여 인자들의 쿼팅(Quoting) 보존
-    # 예: run python -c "print(1)" -> run python -c 'print(1)' 로 변환되어 Backend에 전달
     command = " ".join(shlex.quote(arg) for arg in sys.argv[1:])
-
-    # 1. Request Backend
     print(f"{GREEN}[INFO]{RESET} Requesting backend for: {command}")
+    _set_session_state(command=command, frontend_pod=FRONTEND_POD)
+
+    _register_signal_handlers()
 
     try:
-        response = requests.post(
-            f"{CONTROLLER_URL}/api/execute/",
-            json={
-                "username": os.getenv("USER", "unknown"),
-                "command": command,
-                "frontend_pod": FRONTEND_POD
-            },
-            timeout=10
-        )
-        response.raise_for_status()
-        data = response.json()
+        _controller_response_pending = True
+        _execute_request_in_flight = True
+        try:
+            try:
+                response = requests.post(
+                    f"{CONTROLLER_URL}/api/execute/",
+                    json={
+                        "username": os.getenv("USER", "unknown"),
+                        "command": command,
+                        "frontend_pod": FRONTEND_POD,
+                        "frontend_ip": _frontend_ip_from_env(),
+                        "backend_type": os.getenv("BACKEND_TYPE", "general"),
+                    },
+                    timeout=EXECUTE_REQUEST_TIMEOUT_SECONDS,
+                )
+            finally:
+                _execute_request_in_flight = False
 
-        if data.get("status") != "success":
-            print(f"{RED}[ERROR]{RESET} {data.get('message')}")
+            data = _safe_json(response)
+            status = _normalize_status(data, response)
+            ticket_id = _get_ticket_id(data)
+            ticket_url, cancel_url, release_url = _extract_ticket_urls(data, ticket_id)
+            backend_pod_value, backend_ip_value, tcp_port_value = _get_backend_info(data)
+
+            _set_session_state(
+                status=status or ("queued" if response.status_code == 202 else None),
+                ticket_id=ticket_id,
+                ticket_url=ticket_url,
+                cancel_url=cancel_url,
+                release_url=release_url,
+                backend_pod=backend_pod_value,
+                backend_ip=backend_ip_value,
+                tcp_port=tcp_port_value,
+                command=command,
+                frontend_pod=FRONTEND_POD,
+            )
+        finally:
+            _controller_response_pending = False
+
+        if _deferred_signal_exit_code is not None:
+            cleanup(exit_code=_deferred_signal_exit_code)
+
+        if response.status_code == 202 or status in {"queued", "allocating"}:
+            if not ticket_id:
+                raise RuntimeError("Controller returned queued response without ticket_id")
+
+            print(f"{GREEN}[INFO]{RESET} Ticket queued: {ticket_id}")
+            print(f"{GREEN}[INFO]{RESET} Polling ticket status...")
+
+            poll_status, poll_data = _wait_for_assignment(ticket_url)
+            if poll_status != "assigned":
+                if poll_status == "timeout":
+                    print(f"{RED}[ERROR]{RESET} Ticket wait timed out")
+                    cleanup(exit_code=1)
+                elif poll_status == "failed":
+                    print(f"{RED}[ERROR]{RESET} Ticket allocation failed")
+                    sys.exit(1)
+                elif poll_status == "cancelled":
+                    print(f"{RED}[ERROR]{RESET} Ticket was cancelled")
+                    sys.exit(1)
+                else:
+                    print(f"{RED}[ERROR]{RESET} Ticket ended unexpectedly: {poll_data}")
+                    sys.exit(1)
+
+            backend_pod = session_state.get("backend_pod")
+            backend_ip = session_state.get("backend_ip")
+            tcp_port = session_state.get("tcp_port", DEFAULT_TCP_PORT)
+            if not backend_pod or not backend_ip:
+                raise RuntimeError("Ticket assigned without backend connection details")
+        elif status in {"assigned", "success"} or (backend_pod_value and backend_ip_value and response.ok):
+            backend_pod = backend_pod_value
+            backend_ip = backend_ip_value
+            tcp_port = tcp_port_value
+            _set_session_state(status="assigned", backend_pod=backend_pod, backend_ip=backend_ip, tcp_port=tcp_port)
+        else:
+            print(f"{RED}[ERROR]{RESET} {data.get('message') or data.get('detail') or data or 'Failed to allocate backend'}")
             sys.exit(1)
-
-        backend_pod = data["backend_pod"]
-        backend_ip = data["backend_ip"]
-        tcp_port = data.get("tcp_port", TCP_PORT)
 
         print(f"{GREEN}[INFO]{RESET} Backend allocated: {backend_pod} ({backend_ip})")
         print(f"{GREEN}[INFO]{RESET} Connecting to backend...")
-
-    except Exception as e:
-        print(f"{RED}[ERROR]{RESET} Failed to allocate backend: {e}")
+    except requests.RequestException as exc:
+        print(f"{RED}[ERROR]{RESET} Failed to allocate backend: {exc}")
+        sys.exit(1)
+    except Exception as exc:
+        print(f"{RED}[ERROR]{RESET} Failed to allocate backend: {exc}")
+        if session_state.get("ticket_id") or session_state.get("backend_pod"):
+            cleanup(exit_code=1)
         sys.exit(1)
 
-    # 2. Register Cleanup
-    signal.signal(signal.SIGINT, cleanup)
-    signal.signal(signal.SIGTERM, cleanup)
-    signal.signal(signal.SIGHUP, cleanup)
-
-    # 3. Connect TCP
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock = None
+    old_tty = None
     try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect((backend_ip, int(tcp_port)))
 
-        # 4. Negotiate Settings
         rows, cols = get_terminal_size()
         settings = get_terminal_settings()
-
         header = {
             "command": command,
             "cwd": os.getcwd(),
             "rows": rows,
             "cols": cols,
             "term": os.getenv("TERM", "xterm-256color"),
-            "settings": settings
+            "settings": settings,
         }
+        sock.sendall(f"{json.dumps(header)}\n".encode("utf-8"))
 
-        # Send Header (JSON line)
-        sock.sendall(f"{json.dumps(header)}\n".encode('utf-8'))
-
-        # 5. Interactive Loop (Raw Mode)
         old_tty = termios.tcgetattr(sys.stdin)
-
-        # Marker 파일 생성 (소유권 복구 시 기준 시점)
         marker_file = f"/tmp/run_marker_{os.getpid()}"
-        open(marker_file, 'w').close()
-        t = _time.time() - 1
-        os.utime(marker_file, (t, t))
+        with open(marker_file, "w", encoding="utf-8"):
+            pass
+        timestamp = _time.time() - 1
+        os.utime(marker_file, (timestamp, timestamp))
 
         try:
             tty.setraw(sys.stdin.fileno())
@@ -198,43 +567,39 @@ def main():
             stdout_fd = sys.stdout.fileno()
 
             while True:
-                r, _, _ = select.select([sock, stdin_fd], [], [])
-
-                if sock in r:
+                ready, _, _ = select.select([sock, stdin_fd], [], [])
+                if sock in ready:
                     data = sock.recv(4096)
                     if not data:
                         break
                     os.write(stdout_fd, data)
-
-                if stdin_fd in r:
+                if stdin_fd in ready:
                     data = os.read(stdin_fd, 1024)
                     if not data:
                         break
                     sock.sendall(data)
-
         finally:
-            termios.tcsetattr(sys.stdin, termios.TCSANOW, old_tty)
+            if old_tty is not None:
+                termios.tcsetattr(sys.stdin, termios.TCSANOW, old_tty)
             print()
-
-            # 실행 완료 후 소유권 복구
             fix_ownership(marker_file)
-
-            # Marker 파일 정리
             try:
                 if os.path.exists(marker_file):
                     os.remove(marker_file)
-            except:
+            except Exception:
                 pass
-
-    except Exception as e:
-        try:
-            termios.tcsetattr(sys.stdin, termios.TCSANOW, old_tty)
-        except:
-            pass
-        print(f"\n{RED}[ERROR]{RESET} Connection error: {e}")
+    except Exception as exc:
+        print(f"\n{RED}[ERROR]{RESET} Connection error: {exc}")
+        if session_state.get("ticket_id") or session_state.get("backend_pod"):
+            cleanup(exit_code=1)
+        sys.exit(1)
     finally:
-        sock.close()
-        cleanup()
+        if sock is not None:
+            sock.close()
+        active_exception = sys.exc_info()[1]
+        cleanup(exit_code=None)
+        if _cleanup_failed and not isinstance(active_exception, SystemExit):
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":
