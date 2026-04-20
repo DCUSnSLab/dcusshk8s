@@ -60,6 +60,7 @@ _cleanup_failed = False
 _execute_request_in_flight = False
 _controller_response_pending = False
 _deferred_signal_exit_code = None
+_deferred_signal_signum = None
 
 
 def _set_session_state(**kwargs):
@@ -190,6 +191,32 @@ def _request_json(method, url, payload=None, timeout=10):
     return response, _safe_json(response)
 
 
+def _is_controller_unavailable_error(exc):
+    return isinstance(exc, requests.RequestException)
+
+
+def _describe_poll_error(exc):
+    if exc is None:
+        return ""
+
+    if isinstance(exc, requests.RequestException):
+        response = getattr(exc, "response", None)
+        if response is not None:
+            status_code = getattr(response, "status_code", None)
+            reason = getattr(response, "reason", "") or ""
+            detail = f"{exc.__class__.__name__}: "
+            if status_code:
+                detail += f"HTTP {status_code}"
+                if reason:
+                    detail += f" {reason}"
+            else:
+                detail += str(exc)
+            return detail
+        return f"{exc.__class__.__name__}: {exc}"
+
+    return f"{exc.__class__.__name__}: {exc}"
+
+
 def _best_effort_post(url_candidates, payload, timeout, label):
     last_error = None
     for attempt in range(3):
@@ -247,6 +274,7 @@ def _release_backend(reason):
         "ticket_id": session_state.get("ticket_id"),
         "frontend_pod": session_state.get("frontend_pod"),
         "reason": reason,
+        "source": "frontend_release",
     }
     return _best_effort_post([release_url], payload, RELEASE_REQUEST_TIMEOUT_SECONDS, "release backend")
 
@@ -267,6 +295,9 @@ def _handle_cleanup(reason):
 def _wait_for_assignment(ticket_url):
     deadline = _time.monotonic() + TICKET_WAIT_TIMEOUT_SECONDS
     last_error = None
+    last_error_summary = ""
+    controller_unavailable_warned = False
+    other_poll_error_warned = False
 
     while _time.monotonic() < deadline:
         try:
@@ -313,16 +344,33 @@ def _wait_for_assignment(ticket_url):
                 return "assigned", data
 
             last_error = RuntimeError(f"Unexpected ticket response: {data}")
+            last_error_summary = _describe_poll_error(last_error)
         except Exception as exc:
             last_error = exc
-            print(f"{YELLOW}[WARN]{RESET} Waiting for ticket failed: {exc}")
+            last_error_summary = _describe_poll_error(exc)
+            if not controller_unavailable_warned and _is_controller_unavailable_error(exc):
+                print(f"{YELLOW}[INFO]{RESET} Controller temporarily unavailable, retrying...")
+                controller_unavailable_warned = True
+            elif not other_poll_error_warned:
+                print(f"{YELLOW}[INFO]{RESET} Ticket polling encountered an unexpected error, retrying...")
+                other_poll_error_warned = True
             _time.sleep(TICKET_POLL_INTERVAL_SECONDS)
 
-    return "timeout", {"error": last_error}
+    return "timeout", {"error": last_error, "last_error": last_error_summary}
+
+
+def _format_poll_failure_detail(poll_data):
+    if not isinstance(poll_data, dict):
+        return ""
+
+    detail = poll_data.get("last_error") or poll_data.get("error")
+    if detail is None:
+        return ""
+    return str(detail).strip()
 
 
 def cleanup(signum=None, frame=None, exit_code=None):
-    global _cleanup_completed, _cleanup_failed, _deferred_signal_exit_code
+    global _cleanup_completed, _cleanup_failed, _deferred_signal_exit_code, _deferred_signal_signum
 
     if signum is not None and exit_code is None:
         exit_code = 128 + int(signum)
@@ -335,6 +383,7 @@ def cleanup(signum=None, frame=None, exit_code=None):
         and not backend_pod
     ):
         _deferred_signal_exit_code = exit_code
+        _deferred_signal_signum = signum
         print(f"\n{YELLOW}[INFO]{RESET} Interrupt requested. Waiting for controller response before cleanup...")
         return False
 
@@ -356,8 +405,7 @@ def cleanup(signum=None, frame=None, exit_code=None):
     _cleanup_failed = not cleanup_ok
 
     if exit_code is not None:
-        final_exit_code = exit_code if cleanup_ok else 1
-        raise SystemExit(final_exit_code)
+        raise SystemExit(exit_code)
     return cleanup_ok
 
 
@@ -487,7 +535,7 @@ def main():
             _controller_response_pending = False
 
         if _deferred_signal_exit_code is not None:
-            cleanup(exit_code=_deferred_signal_exit_code)
+            cleanup(signum=_deferred_signal_signum, exit_code=_deferred_signal_exit_code)
 
         if response.status_code == 202 or status in {"queued", "allocating"}:
             if not ticket_id:
@@ -500,9 +548,21 @@ def main():
             if poll_status != "assigned":
                 if poll_status == "timeout":
                     print(f"{RED}[ERROR]{RESET} Ticket wait timed out")
+                    timeout_detail = _format_poll_failure_detail(poll_data)
+                    if timeout_detail:
+                        print(f"{RED}[ERROR]{RESET} Last polling error: {timeout_detail}")
                     cleanup(exit_code=1)
                 elif poll_status == "failed":
-                    print(f"{RED}[ERROR]{RESET} Ticket allocation failed")
+                    failed_detail = (
+                        _format_poll_failure_detail(poll_data)
+                        or poll_data.get("message")
+                        or poll_data.get("detail")
+                        or poll_data.get("error")
+                    )
+                    if failed_detail:
+                        print(f"{RED}[ERROR]{RESET} Ticket allocation failed: {failed_detail}")
+                    else:
+                        print(f"{RED}[ERROR]{RESET} Ticket allocation failed")
                     sys.exit(1)
                 elif poll_status == "cancelled":
                     print(f"{RED}[ERROR]{RESET} Ticket was cancelled")
@@ -538,6 +598,7 @@ def main():
 
     sock = None
     old_tty = None
+    session_completed_successfully = False
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect((backend_ip, int(tcp_port)))
@@ -588,6 +649,7 @@ def main():
                     os.remove(marker_file)
             except Exception:
                 pass
+        session_completed_successfully = True
     except Exception as exc:
         print(f"\n{RED}[ERROR]{RESET} Connection error: {exc}")
         if session_state.get("ticket_id") or session_state.get("backend_pod"):
@@ -598,7 +660,11 @@ def main():
             sock.close()
         active_exception = sys.exc_info()[1]
         cleanup(exit_code=None)
-        if _cleanup_failed and not isinstance(active_exception, SystemExit):
+        if (
+            _cleanup_failed
+            and not isinstance(active_exception, SystemExit)
+            and not session_completed_successfully
+        ):
             raise SystemExit(1)
 
 
