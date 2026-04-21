@@ -154,6 +154,14 @@ class UserPod(LoggingConfigurable):
                               }
                            },
                            {
+                              "name": "POD_IP",
+                              "valueFrom": {
+                                  "fieldRef": {
+                                      "fieldPath": "status.podIP"
+                                  }
+                              }
+                           },
+                           {
                               "name": "USER",
                               "value": "{username}",
                            }

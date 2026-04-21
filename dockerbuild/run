@@ -204,14 +204,14 @@ def _describe_poll_error(exc):
         if response is not None:
             status_code = getattr(response, "status_code", None)
             reason = getattr(response, "reason", "") or ""
-            detail = f"{exc.__class__.__name__}: "
+            summary = f"{exc.__class__.__name__}: "
             if status_code:
-                detail += f"HTTP {status_code}"
+                summary += f"HTTP {status_code}"
                 if reason:
-                    detail += f" {reason}"
+                    summary += f" {reason}"
             else:
-                detail += str(exc)
-            return detail
+                summary += str(exc)
+            return summary
         return f"{exc.__class__.__name__}: {exc}"
 
     return f"{exc.__class__.__name__}: {exc}"
@@ -359,14 +359,14 @@ def _wait_for_assignment(ticket_url):
     return "timeout", {"error": last_error, "last_error": last_error_summary}
 
 
-def _format_poll_failure_detail(poll_data):
+def _format_poll_failure_message(poll_data):
     if not isinstance(poll_data, dict):
         return ""
 
-    detail = poll_data.get("last_error") or poll_data.get("error")
-    if detail is None:
+    message = poll_data.get("last_error") or poll_data.get("error")
+    if message is None:
         return ""
-    return str(detail).strip()
+    return str(message).strip()
 
 
 def cleanup(signum=None, frame=None, exit_code=None):
@@ -548,19 +548,18 @@ def main():
             if poll_status != "assigned":
                 if poll_status == "timeout":
                     print(f"{RED}[ERROR]{RESET} Ticket wait timed out")
-                    timeout_detail = _format_poll_failure_detail(poll_data)
-                    if timeout_detail:
-                        print(f"{RED}[ERROR]{RESET} Last polling error: {timeout_detail}")
+                    timeout_message = _format_poll_failure_message(poll_data)
+                    if timeout_message:
+                        print(f"{RED}[ERROR]{RESET} Last polling error: {timeout_message}")
                     cleanup(exit_code=1)
                 elif poll_status == "failed":
-                    failed_detail = (
-                        _format_poll_failure_detail(poll_data)
+                    failed_message = (
+                        _format_poll_failure_message(poll_data)
                         or poll_data.get("message")
-                        or poll_data.get("detail")
                         or poll_data.get("error")
                     )
-                    if failed_detail:
-                        print(f"{RED}[ERROR]{RESET} Ticket allocation failed: {failed_detail}")
+                    if failed_message:
+                        print(f"{RED}[ERROR]{RESET} Ticket allocation failed: {failed_message}")
                     else:
                         print(f"{RED}[ERROR]{RESET} Ticket allocation failed")
                     sys.exit(1)
@@ -582,7 +581,7 @@ def main():
             tcp_port = tcp_port_value
             _set_session_state(status="assigned", backend_pod=backend_pod, backend_ip=backend_ip, tcp_port=tcp_port)
         else:
-            print(f"{RED}[ERROR]{RESET} {data.get('message') or data.get('detail') or data or 'Failed to allocate backend'}")
+            print(f"{RED}[ERROR]{RESET} {data.get('message') or data or 'Failed to allocate backend'}")
             sys.exit(1)
 
         print(f"{GREEN}[INFO]{RESET} Backend allocated: {backend_pod} ({backend_ip})")
