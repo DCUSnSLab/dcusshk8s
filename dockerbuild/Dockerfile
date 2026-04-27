@@ -1,3 +1,7 @@
+# path : dcusshk8s/dockerbuild
+# docker build -f Dockerfile -t harbor.cu.ac.kr/k8s_dynamic_allocator/frontend:{tag} .
+# docker push harbor.cu.ac.kr/k8s_dynamic_allocator/frontend:{tag}
+
 FROM ubuntu:20.04
 
 ENV DEBIAN_FRONTEND=noninteractive
