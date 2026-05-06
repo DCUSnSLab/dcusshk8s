@@ -18,7 +18,7 @@ import requests
 
 
 CONTROLLER_URL = os.getenv("CONTROLLER_URL", "http://controller-service:9001")
-FRONTEND_POD = os.getenv("HOSTNAME", "unknown")
+USER_POD = os.getenv("HOSTNAME", "unknown")
 DEFAULT_TCP_PORT = 8081
 
 GREEN = "\033[0;32m"
@@ -42,17 +42,17 @@ CANCEL_REQUEST_TIMEOUT_SECONDS = _env_float("RUN_CANCEL_REQUEST_TIMEOUT_SECONDS"
 RELEASE_REQUEST_TIMEOUT_SECONDS = _env_float("RUN_RELEASE_REQUEST_TIMEOUT_SECONDS", "2")
 
 
-backend_pod = None
+compute_pod = None
 session_state = {
     "status": None,
     "ticket_id": None,
     "ticket_url": None,
     "cancel_url": None,
     "release_url": None,
-    "backend_pod": None,
-    "backend_ip": None,
+    "compute_pod": None,
+    "compute_pod_ip": None,
     "tcp_port": DEFAULT_TCP_PORT,
-    "frontend_pod": FRONTEND_POD,
+    "user_pod": USER_POD,
     "command": None,
 }
 _cleanup_completed = False
@@ -105,7 +105,7 @@ def _normalize_status(data, response=None):
             raw_status = "cancelled"
 
     if raw_status in {"ok", "success", "assigned"}:
-        if data.get("backend_pod") or data.get("backend_ip") or data.get("backend"):
+        if data.get("compute_pod") or data.get("compute_pod_ip"):
             return "assigned"
         return "success"
     if raw_status in {"canceled"}:
@@ -125,33 +125,25 @@ def _get_ticket_id(data):
     return None
 
 
-def _get_backend_info(data):
-    backend = data.get("backend")
-    if not isinstance(backend, dict):
-        backend = {}
-
+def _get_compute_info(data):
     ticket = data.get("ticket")
     if not isinstance(ticket, dict):
         ticket = {}
 
-    backend_pod_value = (
-        data.get("backend_pod")
-        or backend.get("backend_pod")
-        or backend.get("pod")
-        or ticket.get("backend_pod")
+    compute_pod_value = (
+        data.get("compute_pod")
+        or ticket.get("compute_pod")
     )
-    backend_ip_value = (
-        data.get("backend_ip")
-        or backend.get("backend_ip")
-        or backend.get("ip")
-        or ticket.get("backend_ip")
+    compute_pod_ip_value = (
+        data.get("compute_pod_ip")
+        or ticket.get("compute_pod_ip")
     )
-    tcp_port_value = data.get("tcp_port") or backend.get("tcp_port") or backend.get("port") or DEFAULT_TCP_PORT
-    return backend_pod_value, backend_ip_value, tcp_port_value
+    tcp_port_value = data.get("tcp_port") or DEFAULT_TCP_PORT
+    return compute_pod_value, compute_pod_ip_value, tcp_port_value
 
 
-def _frontend_ip_from_env():
-    for key in ("FRONTEND_IP", "POD_IP", "MY_POD_IP"):
+def _user_pod_ip_from_env():
+    for key in ("USER_POD_IP", "POD_IP", "MY_POD_IP"):
         value = os.getenv(key, "").strip()
         if value:
             return value
@@ -168,14 +160,14 @@ def _extract_ticket_urls(data, ticket_id):
     if not cancel_url and ticket_id:
         cancel_url = f"/api/ticket/{ticket_id}/cancel/"
     if not release_url:
-        release_url = "/api/pool/release/"
+        release_url = "/api/compute/release/"
 
     ticket_default = f"/api/ticket/{ticket_id}/" if ticket_id else "/api/ticket/"
     cancel_default = f"/api/ticket/{ticket_id}/cancel/" if ticket_id else "/api/ticket/"
     return (
         _absolute_url(ticket_url, ticket_default),
         _absolute_url(cancel_url, cancel_default),
-        _absolute_url(release_url, "/api/pool/release/"),
+        _absolute_url(release_url, "/api/compute/release/"),
     )
 
 
@@ -251,7 +243,7 @@ def _cancel_ticket(reason):
     cancel_url = session_state.get("cancel_url") or _absolute_url(None, f"/api/ticket/{ticket_id}/cancel/")
     payload = {
         "ticket_id": ticket_id,
-        "frontend_pod": session_state.get("frontend_pod"),
+        "user_pod": session_state.get("user_pod"),
         "reason": reason,
         "command": session_state.get("command"),
     }
@@ -263,20 +255,20 @@ def _cancel_ticket(reason):
     )
 
 
-def _release_backend(reason):
-    backend = session_state.get("backend_pod") or backend_pod
-    if not backend:
+def _release_compute_pod(reason):
+    compute_pod_value = session_state.get("compute_pod") or compute_pod
+    if not compute_pod_value:
         return False
 
-    release_url = session_state.get("release_url") or _absolute_url(None, "/api/pool/release/")
+    release_url = session_state.get("release_url") or _absolute_url(None, "/api/compute/release/")
     payload = {
-        "backend_pod": backend,
+        "compute_pod": compute_pod_value,
         "ticket_id": session_state.get("ticket_id"),
-        "frontend_pod": session_state.get("frontend_pod"),
+        "user_pod": session_state.get("user_pod"),
         "reason": reason,
-        "source": "frontend_release",
+        "source": "user_release",
     }
-    return _best_effort_post([release_url], payload, RELEASE_REQUEST_TIMEOUT_SECONDS, "release backend")
+    return _best_effort_post([release_url], payload, RELEASE_REQUEST_TIMEOUT_SECONDS, "release compute pod")
 
 
 def _handle_cleanup(reason):
@@ -285,8 +277,8 @@ def _handle_cleanup(reason):
         return True
 
     cleanup_ok = True
-    if status == "assigned" or session_state.get("backend_pod") or backend_pod:
-        cleanup_ok = _release_backend(reason) and cleanup_ok
+    if status == "assigned" or session_state.get("compute_pod") or compute_pod:
+        cleanup_ok = _release_compute_pod(reason) and cleanup_ok
     elif session_state.get("ticket_id"):
         cleanup_ok = _cancel_ticket(reason) and cleanup_ok
     return cleanup_ok
@@ -305,12 +297,12 @@ def _wait_for_assignment(ticket_url):
             status = _normalize_status(data, response)
 
             if status in {"assigned", "success"}:
-                backend_pod_value, backend_ip_value, tcp_port_value = _get_backend_info(data)
-                if backend_pod_value and backend_ip_value:
+                compute_pod_value, compute_pod_ip_value, tcp_port_value = _get_compute_info(data)
+                if compute_pod_value and compute_pod_ip_value:
                     _set_session_state(
                         status="assigned",
-                        backend_pod=backend_pod_value,
-                        backend_ip=backend_ip_value,
+                        compute_pod=compute_pod_value,
+                        compute_pod_ip=compute_pod_ip_value,
                         tcp_port=tcp_port_value,
                     )
                     return "assigned", data
@@ -333,12 +325,12 @@ def _wait_for_assignment(ticket_url):
                 _time.sleep(max(0.2, sleep_seconds))
                 continue
 
-            backend_pod_value, backend_ip_value, tcp_port_value = _get_backend_info(data)
-            if backend_pod_value and backend_ip_value:
+            compute_pod_value, compute_pod_ip_value, tcp_port_value = _get_compute_info(data)
+            if compute_pod_value and compute_pod_ip_value:
                 _set_session_state(
                     status="assigned",
-                    backend_pod=backend_pod_value,
-                    backend_ip=backend_ip_value,
+                    compute_pod=compute_pod_value,
+                    compute_pod_ip=compute_pod_ip_value,
                     tcp_port=tcp_port_value,
                 )
                 return "assigned", data
@@ -379,8 +371,8 @@ def cleanup(signum=None, frame=None, exit_code=None):
         signum is not None
         and (_execute_request_in_flight or _controller_response_pending)
         and not session_state.get("ticket_id")
-        and not session_state.get("backend_pod")
-        and not backend_pod
+        and not session_state.get("compute_pod")
+        and not compute_pod
     ):
         _deferred_signal_exit_code = exit_code
         _deferred_signal_signum = signum
@@ -396,8 +388,8 @@ def cleanup(signum=None, frame=None, exit_code=None):
     cleanup_ok = True
     if session_state.get("ticket_id"):
         current_status = (session_state.get("status") or "").lower()
-        if current_status == "assigned" or session_state.get("backend_pod") or backend_pod:
-            print(f"\n{YELLOW}[INFO]{RESET} Releasing backend...")
+        if current_status == "assigned" or session_state.get("compute_pod") or compute_pod:
+            print(f"\n{YELLOW}[INFO]{RESET} Releasing compute pod...")
         else:
             print(f"\n{YELLOW}[INFO]{RESET} Cancelling queued ticket...")
         cleanup_ok = _handle_cleanup("signal" if signum is not None else "cleanup")
@@ -478,7 +470,7 @@ def fix_ownership(marker_file):
 
 
 def main():
-    global backend_pod, _controller_response_pending, _execute_request_in_flight
+    global compute_pod, _controller_response_pending, _execute_request_in_flight
 
     if os.getenv("RUN_SESSION"):
         print(f"{RED}[ERROR]{RESET} Cannot use 'run' inside a 'run' session")
@@ -489,8 +481,8 @@ def main():
         sys.exit(1)
 
     command = " ".join(shlex.quote(arg) for arg in sys.argv[1:])
-    print(f"{GREEN}[INFO]{RESET} Requesting backend for: {command}")
-    _set_session_state(command=command, frontend_pod=FRONTEND_POD)
+    print(f"{GREEN}[INFO]{RESET} Requesting compute pod for: {command}")
+    _set_session_state(command=command, user_pod=USER_POD)
 
     _register_signal_handlers()
 
@@ -504,9 +496,9 @@ def main():
                     json={
                         "username": os.getenv("USER", "unknown"),
                         "command": command,
-                        "frontend_pod": FRONTEND_POD,
-                        "frontend_ip": _frontend_ip_from_env(),
-                        "backend_type": os.getenv("BACKEND_TYPE", "general"),
+                        "user_pod": USER_POD,
+                        "user_pod_ip": _user_pod_ip_from_env(),
+                        "compute_type": os.getenv("COMPUTE_TYPE", "general"),
                     },
                     timeout=EXECUTE_REQUEST_TIMEOUT_SECONDS,
                 )
@@ -517,7 +509,7 @@ def main():
             status = _normalize_status(data, response)
             ticket_id = _get_ticket_id(data)
             ticket_url, cancel_url, release_url = _extract_ticket_urls(data, ticket_id)
-            backend_pod_value, backend_ip_value, tcp_port_value = _get_backend_info(data)
+            compute_pod_value, compute_pod_ip_value, tcp_port_value = _get_compute_info(data)
 
             _set_session_state(
                 status=status or ("queued" if response.status_code == 202 else None),
@@ -525,11 +517,11 @@ def main():
                 ticket_url=ticket_url,
                 cancel_url=cancel_url,
                 release_url=release_url,
-                backend_pod=backend_pod_value,
-                backend_ip=backend_ip_value,
+                compute_pod=compute_pod_value,
+                compute_pod_ip=compute_pod_ip_value,
                 tcp_port=tcp_port_value,
                 command=command,
-                frontend_pod=FRONTEND_POD,
+                user_pod=USER_POD,
             )
         finally:
             _controller_response_pending = False
@@ -570,28 +562,28 @@ def main():
                     print(f"{RED}[ERROR]{RESET} Ticket ended unexpectedly: {poll_data}")
                     sys.exit(1)
 
-            backend_pod = session_state.get("backend_pod")
-            backend_ip = session_state.get("backend_ip")
+            compute_pod = session_state.get("compute_pod")
+            compute_pod_ip = session_state.get("compute_pod_ip")
             tcp_port = session_state.get("tcp_port", DEFAULT_TCP_PORT)
-            if not backend_pod or not backend_ip:
-                raise RuntimeError("Ticket assigned without backend connection details")
-        elif status in {"assigned", "success"} or (backend_pod_value and backend_ip_value and response.ok):
-            backend_pod = backend_pod_value
-            backend_ip = backend_ip_value
+            if not compute_pod or not compute_pod_ip:
+                raise RuntimeError("Ticket assigned without compute pod connection details")
+        elif status in {"assigned", "success"} or (compute_pod_value and compute_pod_ip_value and response.ok):
+            compute_pod = compute_pod_value
+            compute_pod_ip = compute_pod_ip_value
             tcp_port = tcp_port_value
-            _set_session_state(status="assigned", backend_pod=backend_pod, backend_ip=backend_ip, tcp_port=tcp_port)
+            _set_session_state(status="assigned", compute_pod=compute_pod, compute_pod_ip=compute_pod_ip, tcp_port=tcp_port)
         else:
-            print(f"{RED}[ERROR]{RESET} {data.get('message') or data or 'Failed to allocate backend'}")
+            print(f"{RED}[ERROR]{RESET} {data.get('message') or data or 'Failed to allocate compute pod'}")
             sys.exit(1)
 
-        print(f"{GREEN}[INFO]{RESET} Backend allocated: {backend_pod} ({backend_ip})")
-        print(f"{GREEN}[INFO]{RESET} Connecting to backend...")
+        print(f"{GREEN}[INFO]{RESET} Compute pod allocated: {compute_pod} ({compute_pod_ip})")
+        print(f"{GREEN}[INFO]{RESET} Connecting to compute pod...")
     except requests.RequestException as exc:
-        print(f"{RED}[ERROR]{RESET} Failed to allocate backend: {exc}")
+        print(f"{RED}[ERROR]{RESET} Failed to allocate compute pod: {exc}")
         sys.exit(1)
     except Exception as exc:
-        print(f"{RED}[ERROR]{RESET} Failed to allocate backend: {exc}")
-        if session_state.get("ticket_id") or session_state.get("backend_pod"):
+        print(f"{RED}[ERROR]{RESET} Failed to allocate compute pod: {exc}")
+        if session_state.get("ticket_id") or session_state.get("compute_pod"):
             cleanup(exit_code=1)
         sys.exit(1)
 
@@ -600,7 +592,7 @@ def main():
     session_completed_successfully = False
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect((backend_ip, int(tcp_port)))
+        sock.connect((compute_pod_ip, int(tcp_port)))
 
         rows, cols = get_terminal_size()
         settings = get_terminal_settings()
@@ -651,7 +643,7 @@ def main():
         session_completed_successfully = True
     except Exception as exc:
         print(f"\n{RED}[ERROR]{RESET} Connection error: {exc}")
-        if session_state.get("ticket_id") or session_state.get("backend_pod"):
+        if session_state.get("ticket_id") or session_state.get("compute_pod"):
             cleanup(exit_code=1)
         sys.exit(1)
     finally:

@@ -58,7 +58,7 @@ class UserPod(LoggingConfigurable):
                 "initContainers": [
                     {
                         "name": "init-setup",
-                        "image": "harbor.cu.ac.kr/k8s_dynamic_allocator/frontend:queue",
+                        "image": "harbor.cu.ac.kr/k8s_dynamic_allocator/user:queue",
                         # "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
                         "imagePullPolicy": "Always",
                         "command": ["/bin/bash","-c"],
@@ -166,7 +166,7 @@ class UserPod(LoggingConfigurable):
                               "value": "{username}",
                            }
                         ],
-                        "image": "harbor.cu.ac.kr/k8s_dynamic_allocator/frontend:latest",
+                        "image": "harbor.cu.ac.kr/k8s_dynamic_allocator/user:latest",
                         # "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
                         "imagePullPolicy": "Always",
                         "name": "shell",
@@ -223,7 +223,7 @@ class UserPod(LoggingConfigurable):
                     {
                         "name": "ssh-public-key",
                         "configMap": {
-                            "name": "backend-public-key"
+                            "name": "compute-public-key"
                         }
                     }
                 ],
