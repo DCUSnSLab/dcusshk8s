@@ -1,6 +1,6 @@
 # path : dcusshk8s/dockerbuild
-# docker build -f Dockerfile -t harbor.cu.ac.kr/k8s_dynamic_allocator/user:{tag} .
-# docker push harbor.cu.ac.kr/k8s_dynamic_allocator/user:{tag}
+# docker build -f Dockerfile -t harbor.cu.ac.kr/k8s_dynamic_allocator/user_pod:{tag} .
+# docker push harbor.cu.ac.kr/k8s_dynamic_allocator/user_pod:{tag}
 
 FROM ubuntu:20.04
 
