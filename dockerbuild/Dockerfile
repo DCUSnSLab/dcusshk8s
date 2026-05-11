@@ -15,7 +15,11 @@ RUN mkdir -p /run/sshd && \
     echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config && \
     echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
 
-RUN useradd -s /bin/bash -u 1000 dcuuser && echo "dcuuser:dcuuser" | chpasswd && adduser dcuuser sudo
+RUN useradd -s /bin/bash -u 1000 dcuuser && \
+    mkdir -p /home/dcuuser && \
+    chown -R dcuuser:dcuuser /home/dcuuser && \
+    echo "dcuuser:dcuuser" | chpasswd && \
+    adduser dcuuser sudo
 RUN echo 'dcuuser ALL=(ALL) NOPASSWD:ALL' | tee -a /etc/sudoers
 
 USER dcuuser
