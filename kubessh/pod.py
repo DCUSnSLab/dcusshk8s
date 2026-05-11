@@ -166,7 +166,7 @@ class UserPod(LoggingConfigurable):
                               "value": "{username}",
                            }
                         ],
-                        "image": "harbor.cu.ac.kr/k8s_dynamic_allocator/user:latest",
+                        "image": "harbor.cu.ac.kr/k8s_dynamic_allocator/user_pod:latest",
                         # "image": "harbor.cu.ac.kr/swlabpods/dbuntu:latest",
                         "imagePullPolicy": "Always",
                         "name": "shell",
