@@ -1,16 +1,3 @@
-"""DummyAuthenticator — dcucode_sso 통합 버전.
-
-클래스 이름은 호환 위해 보존(`DummyAuthenticator`). 내부 구현만 SSO 호출로 갈음.
-운영자는 config 의 `authenticator_class` 변경 없이 자동으로 SSO 인증 사용.
-
-흐름 2가지:
-  1) SSH client (일반):  username + password
-        → SSO `/oauth/token`  grant_type=password (ROPC)
-  2) OJ frontend Container.vue (webssh):  username='dcucode-<real>'  password=<SSO access_token>
-        → SSO `/userinfo`  Bearer <token> → preferred_username 매칭 검증
-
-옛 OJ backend `/api/login` · `/api/token_auth` 호출 흐름은 제거. SSO 가 인증 권위.
-"""
 import os
 
 from kubessh.authentication import Authenticator
@@ -19,7 +6,7 @@ from traitlets import Unicode, Float
 
 
 class DummyAuthenticator(Authenticator):
-    """환경변수 우선, config 도 가능 (config 가 더 강함).
+    """환경변수 우선, traitlets config 도 가능 (config 가 더 강함).
 
     K8s/docker 의 env 만으로 운영 가능. config 파일 변경 불필요.
     """
@@ -65,9 +52,12 @@ class DummyAuthenticator(Authenticator):
     def validate_password(self, username, password):
         if not username or not password:
             return False
+        # username 이 'dcucode-<real>' 형식이면 → password 가 SSO access_token.
+        # OJ frontend 의 Container.vue 가 token 으로 SSH 인증할 때 흐름.
         if self.token_username_prefix and username.startswith(self.token_username_prefix):
             real_username = username[len(self.token_username_prefix):]
             return self._verify_token(real_username, password)
+        # 그 외 — username/password 로 ROPC.
         return self._verify_password(username, password)
 
     # ----- ROPC (일반 SSH client) -----
@@ -99,6 +89,12 @@ class DummyAuthenticator(Authenticator):
 
     # ----- Bearer token (Container.vue webssh) -----
     def _verify_token(self, expected_username, token):
+        """Bearer access_token 을 userinfo endpoint 로 검증.
+
+        검증 항목:
+          - status 200 (token 유효 + 미만료)
+          - preferred_username == expected_username (다른 user 의 token 으로 SSH 못 함)
+        """
         try:
             r = requests.get(
                 self.sso_userinfo_url,
