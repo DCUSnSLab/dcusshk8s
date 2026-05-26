@@ -10,7 +10,7 @@ setuptools.setup(
     description="SSH server to spawn users into kubernetes pods",
     packages=setuptools.find_packages(),
     install_requires=[
-        'kubernetes',
+        'kubernetes==35.0.0',
         'asyncssh',
         'ptyprocess',
         'aiohttp',
