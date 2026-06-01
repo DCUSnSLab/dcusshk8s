@@ -1,93 +1,138 @@
+"""DummyAuthenticator — dcucode_sso 통합 버전.
+
+클래스 이름은 호환 위해 보존(`DummyAuthenticator`). 내부 구현만 SSO 호출로 갈음.
+운영자는 config 의 `authenticator_class` 변경 없이 자동으로 SSO 인증 사용.
+
+흐름 2가지:
+  1) SSH client (일반):  username + password
+        → SSO `/oauth/token`  grant_type=password (ROPC)
+  2) OJ frontend Container.vue (webssh):  username='dcucode-<real>'  password=<SSO access_token>
+        → SSO `/userinfo`  Bearer <token> → preferred_username 매칭 검증
+
+옛 OJ backend `/api/login` · `/api/token_auth` 호출 흐름은 제거. SSO 가 인증 권위.
+
+환경변수 (default 외 override):
+  SSO_TOKEN_URL              http://dcu-sso:8000/oauth/token
+  SSO_USERINFO_URL           http://dcu-sso:8000/userinfo
+  SSO_CLIENT_ID              kubessh
+  SSO_CLIENT_SECRET          dev-kubessh-secret
+  SSO_SCOPE                  openid profile
+  SSO_HTTP_TIMEOUT           10
+  SSO_TOKEN_USERNAME_PREFIX  dcucode-
+"""
+import os
+
 from kubessh.authentication import Authenticator
 import requests
-import json
-from Crypto.PublicKey import RSA
-from Crypto.Cipher import PKCS1_v1_5
-import base64
+from traitlets import Unicode, Float
 
 
 class DummyAuthenticator(Authenticator):
-    """
-    Dummy SSH Authenticator.
+    """환경변수 우선, traitlets config 도 가능 (config 가 더 강함).
 
-    Allows ssh logins where the username is the same as the password.
+    K8s/docker 의 env 만으로 운영 가능. config 파일 변경 불필요.
     """
+
+    sso_token_url = Unicode(
+        os.environ.get("SSO_TOKEN_URL", "http://dcu-sso:8000/oauth/token"),
+        config=True,
+        help="SSO OAuth token endpoint. env: SSO_TOKEN_URL",
+    )
+    sso_userinfo_url = Unicode(
+        os.environ.get("SSO_USERINFO_URL", "http://dcu-sso:8000/userinfo"),
+        config=True,
+        help="SSO OIDC userinfo endpoint. env: SSO_USERINFO_URL",
+    )
+    sso_client_id = Unicode(
+        os.environ.get("SSO_CLIENT_ID", "kubessh"),
+        config=True, help="env: SSO_CLIENT_ID",
+    )
+    sso_client_secret = Unicode(
+        os.environ.get("SSO_CLIENT_SECRET", "dev-kubessh-secret"),
+        config=True, help="env: SSO_CLIENT_SECRET (운영은 K8s Secret 권장)",
+    )
+    sso_scope = Unicode(
+        os.environ.get("SSO_SCOPE", "openid profile"),
+        config=True, help="env: SSO_SCOPE",
+    )
+    sso_timeout_sec = Float(
+        float(os.environ.get("SSO_HTTP_TIMEOUT", "10")),
+        config=True, help="env: SSO_HTTP_TIMEOUT",
+    )
+    token_username_prefix = Unicode(
+        os.environ.get("SSO_TOKEN_USERNAME_PREFIX", "dcucode-"),
+        config=True,
+        help=(
+            "SSH username 이 이 prefix 로 시작하면 password 를 SSO access_token 으로 간주. "
+            "OJ Container.vue webssh 호환. env: SSO_TOKEN_USERNAME_PREFIX"
+        ),
+    )
+
     def password_auth_supported(self):
         return True
 
-    def get_public_key(self):
-        try:
-            #response = requests.get('http://203.250.33.87:31320/api/get_public_key')
-            response = requests.get('http://203.250.33.85/api/get_public_key')
-            if response.status_code == 200:
-                return response.json()['data']['public_key']
-            else:
-                self.log.error(f"Failed to get public key: {response.status_code}")
-                return None
-        except Exception as e:
-            self.log.error(f"Error fetching public key: {str(e)}")
-            return None
-
-    def encrypt_password(self, public_key_str, password):
-        try:
-            public_key = RSA.import_key(public_key_str)
-            cipher = PKCS1_v1_5.new(public_key)
-            encrypted_password = cipher.encrypt(password.encode())
-            return base64.b64encode(encrypted_password).decode('utf-8')
-        except Exception as e:
-            self.log.error(f"Error encrypting password: {str(e)}")
-            return None
-
     def validate_password(self, username, password):
-        self.log.info(f"Login attempted by {username}")
-        
-        public_key = self.get_public_key()
-        if not public_key:
+        if not username or not password:
             return False
-        
-        encrypted_password = self.encrypt_password(public_key, password)
-        if not encrypted_password:
+        # username 이 'dcucode-<real>' 형식이면 → password 가 SSO access_token.
+        # OJ frontend 의 Container.vue 가 token 으로 SSH 인증할 때 흐름.
+        if self.token_username_prefix and username.startswith(self.token_username_prefix):
+            real_username = username[len(self.token_username_prefix):]
+            return self._verify_token(real_username, password)
+        # 그 외 — username/password 로 ROPC.
+        return self._verify_password(username, password)
+
+    # ----- ROPC (일반 SSH client) -----
+    def _verify_password(self, username, password):
+        try:
+            r = requests.post(
+                self.sso_token_url,
+                data={
+                    "grant_type": "password",
+                    "username": username,
+                    "password": password,
+                    "scope": self.sso_scope,
+                    "client_id": self.sso_client_id,
+                    "client_secret": self.sso_client_secret,
+                },
+                timeout=self.sso_timeout_sec,
+            )
+        except requests.RequestException as e:
+            self.log.error(f"SSO ROPC request failed for {username}: {e}")
             return False
-
-        if username.split('-')[0] == 'dcucode':
-            tokenLoginUrl = 'http://203.250.33.85/api/token_auth'
-            # tokenLoginUrl = 'http://203.250.33.87:30481/api/token_auth' # dcucode dev
-            # tokenLoginUrl = 'http://203.250.33.87:31617/api/token_auth' # dcucode test
-            real_username = username.split('-', 1)[1]
-            data = {
-                'token': password,
-                'username': real_username
-            }
-            response = requests.post(tokenLoginUrl, json=data)
-            if response.status_code == 200:
-                response_data = json.loads(response.text)
-
-                self.log.debug(response_data['data'])
-    
-                if response_data['error'] == None:
-                    return True
+        if r.status_code != 200:
+            self.log.info(f"SSO ROPC denied for {username}: status={r.status_code} body={r.text[:200]}")
             return False
-        else:
-            #url = 'http://203.250.33.87:30481/api/login' # dcucode dev
-            url = 'http://203.250.33.85/api/login'
-            data = {
-                'username': username,
-                'password': encrypted_password
-            }
-            response = requests.post(url, json=data)
-            self.log.info(f"HTTP response status code : {response.status_code}")
-
-            if response.status_code == 200:
-                response_data = json.loads(response.text)
-
-                self.log.debug(response_data['data'])
-    
-                if response_data['error'] == None:
-                    return True
-            #print("Response text:\n", response.text)
+        if not (r.json() if r.content else {}).get("access_token"):
+            self.log.info(f"SSO ROPC: no access_token for {username}")
             return False
-        
-        
+        self.log.info(f"SSO ROPC ok for {username}")
+        return True
 
-        
+    # ----- Bearer token (Container.vue webssh) -----
+    def _verify_token(self, expected_username, token):
+        """Bearer access_token 을 userinfo endpoint 로 검증.
 
+        검증 항목:
+          - status 200 (token 유효 + 미만료)
+          - preferred_username == expected_username (다른 user 의 token 으로 SSH 못 함)
+        """
+        try:
+            r = requests.get(
+                self.sso_userinfo_url,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=self.sso_timeout_sec,
+            )
+        except requests.RequestException as e:
+            self.log.error(f"SSO userinfo failed for {expected_username}: {e}")
+            return False
+        if r.status_code != 200:
+            self.log.info(f"SSO token denied for {expected_username}: status={r.status_code} body={r.text[:200]}")
+            return False
+        data = r.json() if r.content else {}
+        actual = data.get("preferred_username", "")
+        if actual != expected_username:
+            self.log.info(f"SSO token user mismatch: token={actual} username={expected_username}")
+            return False
+        self.log.info(f"SSO token ok for {expected_username}")
+        return True
