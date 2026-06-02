@@ -43,6 +43,14 @@ class DummyAuthenticator(Authenticator):
         config=True,
         help="SSO OIDC userinfo endpoint. env: SSO_USERINFO_URL",
     )
+    oj_token_auth_url = Unicode(
+        os.environ.get("OJ_TOKEN_AUTH_URL", "http://oj-backend:8000/api/token_auth"),
+        config=True,
+        help=(
+            "OJ backend 의 SimpleJWT 검증 endpoint. Container.vue webssh 가 보내는 "
+            "token 은 OJ 자체 SimpleJWT 라 SSO 가 아닌 OJ 가 검증. env: OJ_TOKEN_AUTH_URL"
+        ),
+    )
     sso_client_id = Unicode(
         os.environ.get("SSO_CLIENT_ID", "kubessh"),
         config=True, help="env: SSO_CLIENT_ID",
@@ -109,30 +117,32 @@ class DummyAuthenticator(Authenticator):
         self.log.info(f"SSO ROPC ok for {username}")
         return True
 
-    # ----- Bearer token (Container.vue webssh) -----
+    # ----- OJ SimpleJWT (Container.vue webssh) -----
     def _verify_token(self, expected_username, token):
-        """Bearer access_token 을 userinfo endpoint 로 검증.
+        """OJ frontend Container.vue 가 보낸 OJ SimpleJWT 를 OJ backend 로 검증.
 
-        검증 항목:
-          - status 200 (token 유효 + 미만료)
-          - preferred_username == expected_username (다른 user 의 token 으로 SSH 못 함)
+        OJ 는 SSO 로그인 후 자체 SimpleJWT(access_token) 를 발급해 localStorage 에 보관.
+        그 token 은 OJ 의 SECRET_KEY 로 서명 → SSO 가 모름. OJ 의 /api/token_auth 가
+        token 의 user_id + username 매칭을 검증.
+
+        OJ TokenAuthenticationAPI 응답: {"error": null, "data": "Succeeded"}  (성공)
+                                        {"error": "...", "data": ...}        (실패)
         """
         try:
-            r = requests.get(
-                self.sso_userinfo_url,
-                headers={"Authorization": f"Bearer {token}"},
+            r = requests.post(
+                self.oj_token_auth_url,
+                json={"token": token, "username": expected_username},
                 timeout=self.sso_timeout_sec,
             )
         except requests.RequestException as e:
-            self.log.error(f"SSO userinfo failed for {expected_username}: {e}")
+            self.log.error(f"OJ token_auth failed for {expected_username}: {e}")
             return False
         if r.status_code != 200:
-            self.log.info(f"SSO token denied for {expected_username}: status={r.status_code} body={r.text[:200]}")
+            self.log.info(f"OJ token denied for {expected_username}: status={r.status_code} body={r.text[:200]}")
             return False
-        data = r.json() if r.content else {}
-        actual = data.get("preferred_username", "")
-        if actual != expected_username:
-            self.log.info(f"SSO token user mismatch: token={actual} username={expected_username}")
+        body = r.json() if r.content else {}
+        if body.get("error") is not None:
+            self.log.info(f"OJ token rejected for {expected_username}: {body.get('error')}")
             return False
-        self.log.info(f"SSO token ok for {expected_username}")
+        self.log.info(f"OJ token ok for {expected_username}")
         return True
