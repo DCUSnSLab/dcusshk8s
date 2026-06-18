@@ -174,12 +174,12 @@ class UserPod(LoggingConfigurable):
                         "tty": True,
                         "resources": {
                            "requests": {
-                                   "cpu": "50m",
-                                   "memory": "150Mi",
+                                   "cpu": "200m",
+                                   "memory": "256Mi",
                            },
                            "limits": {
-                                       "cpu": "100m",
-                                       "memory": "200Mi",
+                                       "cpu": "1000m",
+                                       "memory": "768Mi",
                            },
                         },
                         "volumeMounts": [
@@ -255,8 +255,8 @@ class UserPod(LoggingConfigurable):
                                     "storage": "5Gi",
                             },
                     },
-                    #"storageClassName": "normal-r3",
-                    "storageClassName": "openebs-hostpath",
+                    "storageClassName": "normal-r3",
+                    # "storageClassName": "openebs-hostpath",
                 },
             },
             
