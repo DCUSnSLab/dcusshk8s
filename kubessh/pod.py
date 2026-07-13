@@ -255,8 +255,8 @@ class UserPod(LoggingConfigurable):
                                     "storage": "5Gi",
                             },
                     },
-                    "storageClassName": "normal-r3",
-                    # "storageClassName": "openebs-hostpath",
+                    # "storageClassName": "normal-r3",
+                    "storageClassName": "openebs-hostpath",
                 },
             },
             
