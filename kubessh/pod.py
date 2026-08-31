@@ -28,6 +28,10 @@ except kubernetes.config.ConfigException:
 # FIXME: Figure out if making this global is a problem
 v1 = k.CoreV1Api()
 
+DEFAULT_USER_POD_IMAGE = "harbor.cu.ac.kr/k8s_dynamic_allocator/user_pod:latest"
+DEFAULT_USER_POD_STORAGE_CLASS = "openebs-hostpath"
+
+
 class PodState(Enum):
     UNKNOWN = 0
     STARTING = 1
@@ -45,6 +49,18 @@ class UserPod(LoggingConfigurable):
 
     Config from administrators is set via traitlets in config.
     """
+    user_pod_image = Unicode(
+        os.getenv("USER_POD_IMAGE") or DEFAULT_USER_POD_IMAGE,
+        help="Container image used by both user-pod init and shell containers.",
+        config=True,
+    )
+
+    user_pod_storage_class = Unicode(
+        os.getenv("USER_POD_STORAGE_CLASS") or DEFAULT_USER_POD_STORAGE_CLASS,
+        help="StorageClass used for dynamically created user-pod PVCs.",
+        config=True,
+    )
+
     pod_template = Dict(
         {
             "apiVersion": "v1",
@@ -357,6 +373,20 @@ class UserPod(LoggingConfigurable):
 
     def make_pod_spec(self):
         pod = make_api_object_from_dict(self._expand_all(self.pod_template), k.V1Pod)
+        # Optional override: when user_pod_image is set, retag the containers the
+        # default template defines. A customised pod_template that renames or
+        # drops them keeps whatever image it declares, so this stays a no-op
+        # rather than an error for anyone using their own template.
+        image = (self.user_pod_image or "").strip()
+        if image:
+            for containers, container_name in (
+                (pod.spec.init_containers or [], "init-setup"),
+                (pod.spec.containers or [], "shell"),
+            ):
+                for container in containers:
+                    if container.name == container_name:
+                        container.image = image
+
         pod.metadata.name = self.pod_name
         # print(pod)
         pod.spec.volumes[0].persistent_volume_claim = k.V1PersistentVolumeClaimVolumeSource(claim_name = self.pod_name + '-pvc')
@@ -370,6 +400,11 @@ class UserPod(LoggingConfigurable):
         # print('test pvc')
         # print(template)
         pvc = make_api_object_from_dict(self._expand_all(template), k.V1PersistentVolumeClaim)
+        # Optional override, same rule as the image above: an unset value leaves
+        # the template's own storageClassName untouched.
+        storage_class = (self.user_pod_storage_class or "").strip()
+        if storage_class:
+            pvc.spec.storage_class_name = storage_class
         pvc.metadata.name = self.pod_name + '-pvc'
         # print(pvc)
         if pvc.metadata.labels is None:
