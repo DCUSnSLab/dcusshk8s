@@ -36,7 +36,10 @@ def _env_float(name, default):
 
 EXECUTE_REQUEST_TIMEOUT_SECONDS = _env_float("RUN_EXECUTE_REQUEST_TIMEOUT_SECONDS", "10")
 TICKET_POLL_REQUEST_TIMEOUT_SECONDS = _env_float("RUN_TICKET_POLL_REQUEST_TIMEOUT_SECONDS", "10")
-TICKET_WAIT_TIMEOUT_SECONDS = _env_float("RUN_TICKET_WAIT_TIMEOUT_SECONDS", "1800")
+# 0 waits as long as the queue takes; the controller drops the ticket only after
+# this client stops polling. The wait-timeout path below is only used when this
+# is set to a positive value.
+TICKET_WAIT_TIMEOUT_SECONDS = _env_float("RUN_TICKET_WAIT_TIMEOUT_SECONDS", "0")
 TICKET_POLL_INTERVAL_SECONDS = _env_float("RUN_TICKET_POLL_INTERVAL_SECONDS", "1.0")
 CANCEL_REQUEST_TIMEOUT_SECONDS = _env_float("RUN_CANCEL_REQUEST_TIMEOUT_SECONDS", "5")
 RELEASE_REQUEST_TIMEOUT_SECONDS = _env_float("RUN_RELEASE_REQUEST_TIMEOUT_SECONDS", "2")
@@ -285,13 +288,15 @@ def _handle_cleanup(reason):
 
 
 def _wait_for_assignment(ticket_url):
-    deadline = _time.monotonic() + TICKET_WAIT_TIMEOUT_SECONDS
+    deadline = None
+    if TICKET_WAIT_TIMEOUT_SECONDS > 0:
+        deadline = _time.monotonic() + TICKET_WAIT_TIMEOUT_SECONDS
     last_error = None
     last_error_summary = ""
     controller_unavailable_warned = False
     other_poll_error_warned = False
 
-    while _time.monotonic() < deadline:
+    while deadline is None or _time.monotonic() < deadline:
         try:
             response, data = _request_json("GET", ticket_url, timeout=TICKET_POLL_REQUEST_TIMEOUT_SECONDS)
             status = _normalize_status(data, response)
