@@ -34,6 +34,49 @@ def _env_float(name, default):
         return float(default)
 
 
+# Last bytes of a session, written by the compute agent: the command's exit
+# status. Without it a closed socket is ambiguous - a finished command and a
+# Pod that died look identical - so its absence is treated as a cut session.
+# NUL never appears in terminal output from these workloads, so the marker
+# cannot collide with the stream it rides on.
+EXIT_TRAILER_PREFIX = b"\x00KDA_EXIT:"
+
+
+def split_exit_trailer(buf):
+    """Return (payload, exit_status). exit_status is None when absent."""
+    start = buf.rfind(EXIT_TRAILER_PREFIX)
+    if start == -1:
+        return buf, None
+    rest = buf[start + len(EXIT_TRAILER_PREFIX):]
+    end = rest.find(b"\n")
+    if end == -1:
+        return buf, None
+    try:
+        status = int(rest[:end].decode("ascii", "replace").strip())
+    except ValueError:
+        return buf, None
+    return buf[:start] + rest[end + 1:], status
+
+
+def hold_back_partial_trailer(buf):
+    """Split off a tail that is, or may still become, the trailer.
+
+    A finished trailer has to stay held rather than be flushed: it is the
+    last thing on the wire, and split_exit_trailer only sees what is left
+    at EOF. Flushing it would print the marker and lose the status.
+
+    Only a NUL can begin one, and normal output has none, so an
+    interactive session keeps flushing byte for byte.
+    """
+    idx = buf.rfind(b"\x00")
+    if idx == -1:
+        return buf, b""
+    tail = buf[idx:]
+    if tail.startswith(EXIT_TRAILER_PREFIX) or EXIT_TRAILER_PREFIX.startswith(tail):
+        return buf[:idx], tail
+    return buf, b""
+
+
 EXECUTE_REQUEST_TIMEOUT_SECONDS = _env_float("RUN_EXECUTE_REQUEST_TIMEOUT_SECONDS", "10")
 TICKET_POLL_REQUEST_TIMEOUT_SECONDS = _env_float("RUN_TICKET_POLL_REQUEST_TIMEOUT_SECONDS", "10")
 # 0 waits as long as the queue takes; the controller drops the ticket only after
@@ -595,6 +638,7 @@ def main():
     sock = None
     old_tty = None
     session_completed_successfully = False
+    remote_exit_status = None
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect((compute_pod_ip, int(tcp_port)))
@@ -623,18 +667,26 @@ def main():
             stdin_fd = sys.stdin.fileno()
             stdout_fd = sys.stdout.fileno()
 
+            pending = b""
             while True:
                 ready, _, _ = select.select([sock, stdin_fd], [], [])
                 if sock in ready:
                     data = sock.recv(4096)
                     if not data:
                         break
-                    os.write(stdout_fd, data)
+                    pending += data
+                    flush, pending = hold_back_partial_trailer(pending)
+                    if flush:
+                        os.write(stdout_fd, flush)
                 if stdin_fd in ready:
                     data = os.read(stdin_fd, 1024)
                     if not data:
                         break
                     sock.sendall(data)
+
+            leftover, remote_exit_status = split_exit_trailer(pending)
+            if leftover:
+                os.write(stdout_fd, leftover)
         finally:
             if old_tty is not None:
                 termios.tcsetattr(sys.stdin, termios.TCSANOW, old_tty)
@@ -645,7 +697,13 @@ def main():
                     os.remove(marker_file)
             except Exception:
                 pass
-        session_completed_successfully = True
+        if remote_exit_status is None:
+            print(
+                f"\n{RED}[ERROR]{RESET} Compute session ended without an exit "
+                "status; the compute pod stopped before the command finished."
+            )
+        else:
+            session_completed_successfully = True
     except Exception as exc:
         print(f"\n{RED}[ERROR]{RESET} Connection error: {exc}")
         if session_state.get("ticket_id") or session_state.get("compute_pod"):
@@ -662,6 +720,10 @@ def main():
             and not session_completed_successfully
         ):
             raise SystemExit(1)
+        if not isinstance(active_exception, SystemExit):
+            # A cut session is a failure; otherwise hand back what the command
+            # itself returned so callers can tell the two apart.
+            raise SystemExit(1 if remote_exit_status is None else remote_exit_status)
 
 
 if __name__ == "__main__":
