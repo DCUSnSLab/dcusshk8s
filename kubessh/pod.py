@@ -188,14 +188,24 @@ class UserPod(LoggingConfigurable):
                         "name": "shell",
                         "stdin": True,
                         "tty": True,
+                        # Baseline comparison arm: the work runs here instead of
+                        # on a compute pod, so this container carries the same
+                        # ceiling a compute pod would have had - 2 cores and 4Gi.
+                        #
+                        # Requests stay small on purpose. The scheduler reserves
+                        # requests, not limits, and n1~n4 have roughly 125 cores
+                        # spare; 100 users x 2 cores would never be placed. Since
+                        # a user is idle between requests, the limit is what the
+                        # arm actually costs while working, and occupancy is
+                        # reported as limits x time.
                         "resources": {
                            "requests": {
                                    "cpu": "50m",
                                    "memory": "150Mi",
                            },
                            "limits": {
-                                       "cpu": "200m",
-                                       "memory": "300Mi",
+                                       "cpu": "2",
+                                       "memory": "4Gi",
                            },
                         },
                         "volumeMounts": [
