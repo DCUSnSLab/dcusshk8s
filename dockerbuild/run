@@ -39,6 +39,31 @@ def _env_float(name, default):
 # Pod that died look identical - so its absence is treated as a cut session.
 # NUL never appears in terminal output from these workloads, so the marker
 # cannot collide with the stream it rides on.
+# Keepalive on the compute socket. A Pod that is force-deleted or whose node
+# fails never sends FIN, so without this the connection stays ESTABLISHED and
+# the session below blocks forever. These match the agent side, which gives up
+# on a peer after roughly KEEPIDLE + KEEPCNT * KEEPINTVL seconds.
+KEEPALIVE_IDLE_SECONDS = int(os.getenv("RUN_KEEPALIVE_IDLE_SECONDS", "10"))
+KEEPALIVE_INTERVAL_SECONDS = int(os.getenv("RUN_KEEPALIVE_INTERVAL_SECONDS", "5"))
+KEEPALIVE_FAIL_COUNT = int(os.getenv("RUN_KEEPALIVE_FAIL_COUNT", "3"))
+
+
+def enable_keepalive(sock):
+    """Ask the kernel to probe an idle peer and fail the socket if it is gone."""
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    for name, value in (
+        ("TCP_KEEPIDLE", KEEPALIVE_IDLE_SECONDS),
+        ("TCP_KEEPINTVL", KEEPALIVE_INTERVAL_SECONDS),
+        ("TCP_KEEPCNT", KEEPALIVE_FAIL_COUNT),
+    ):
+        option = getattr(socket, name, None)
+        if option is None:
+            # Not on this platform; SO_KEEPALIVE alone still applies, just on
+            # the system default schedule.
+            continue
+        sock.setsockopt(socket.IPPROTO_TCP, option, value)
+
+
 EXIT_TRAILER_PREFIX = b"\x00KDA_EXIT:"
 
 
@@ -639,9 +664,11 @@ def main():
     old_tty = None
     session_completed_successfully = False
     remote_exit_status = None
+    session_error = None
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect((compute_pod_ip, int(tcp_port)))
+        enable_keepalive(sock)
 
         rows, cols = get_terminal_size()
         settings = get_terminal_settings()
@@ -671,7 +698,16 @@ def main():
             while True:
                 ready, _, _ = select.select([sock, stdin_fd], [], [])
                 if sock in ready:
-                    data = sock.recv(4096)
+                    try:
+                        data = sock.recv(4096)
+                    except OSError as exc:
+                        # Keepalive gave up on the peer. Leaving the loop here
+                        # lands on the missing-trailer path below, which is the
+                        # same outcome as any other session that was cut. The
+                        # terminal is still raw, so the reason is reported once
+                        # it has been restored rather than printed here.
+                        session_error = exc
+                        break
                     if not data:
                         break
                     pending += data
@@ -698,9 +734,14 @@ def main():
             except Exception:
                 pass
         if remote_exit_status is None:
+            reason = (
+                f"the connection failed ({session_error})"
+                if session_error is not None
+                else "the compute pod stopped before the command finished"
+            )
             print(
                 f"\n{RED}[ERROR]{RESET} Compute session ended without an exit "
-                "status; the compute pod stopped before the command finished."
+                f"status; {reason}."
             )
         else:
             session_completed_successfully = True
