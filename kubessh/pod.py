@@ -197,13 +197,17 @@ class UserPod(LoggingConfigurable):
                         "tty": True,
                         # Baseline comparison arm: the work runs here instead of
                         # on a compute pod, so this container carries the same
-                        # ceiling a compute pod would have had - 2 cores and 4Gi.
+                        # ceiling a compute pod would have had - 1 core and 2Gi
+                        # since 10/4, when the compute pod shape dropped from
+                        # 2 cores/4Gi. Leaving it at the old value would report
+                        # twice this arm's real occupancy and tilt the
+                        # comparison towards the proposed system.
                         #
                         # Requests stay small on purpose. The scheduler reserves
-                        # requests, not limits, and n1~n4 have roughly 125 cores
-                        # spare; 100 users x 2 cores would never be placed. Since
-                        # a user is idle between requests, the limit is what the
-                        # arm actually costs while working, and occupancy is
+                        # requests, not limits, and the eligible nodes have far
+                        # less spare than 100 users x 1 core. Since a user is
+                        # idle between requests, the limit is what the arm
+                        # actually costs while working, and occupancy is
                         # reported as limits x time.
                         "resources": {
                            "requests": {
@@ -211,8 +215,8 @@ class UserPod(LoggingConfigurable):
                                    "memory": "150Mi",
                            },
                            "limits": {
-                                       "cpu": "2",
-                                       "memory": "4Gi",
+                                       "cpu": "1",
+                                       "memory": "2Gi",
                            },
                         },
                         "volumeMounts": [
