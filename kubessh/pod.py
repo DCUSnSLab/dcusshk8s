@@ -68,8 +68,15 @@ class UserPod(LoggingConfigurable):
             "metadata": {},
             "spec": {
                 "automountServiceAccountToken": False,
-                "nodeSelector": { 
-                    "kubessh": "general_node"
+                "nodeSelector": {
+                    "kubessh": "general_node",
+                    # n1~n3 only. n4 keeps the default maxPods of 110 where the
+                    # others allow 250, and it hosts pinned StatefulSets whose
+                    # recreation a user pod there could block. The shared
+                    # kubessh=general_node label is used by the production
+                    # service, so the exclusion is an added label of our own
+                    # rather than a change to that one.
+                    "k8s-dynamic-allocator/userpod": "true",
                 },
                 "initContainers": [
                     {
